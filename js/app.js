@@ -23,7 +23,9 @@ import { MediaLibrary, isVideoFileName }         from './media-library.js';
 import {
   AssemblyAIClientManager,
   AssemblyAIConfigError,
+  ASSEMBLYAI_SPEECH_MODELS,
   DEFAULT_POSTPROCESS_MODEL,
+  DEFAULT_ASSEMBLYAI_SPEECH_MODEL,
   OpenAIClientManager,
   OpenAIConfigError,
   POSTPROCESS_MODELS,
@@ -60,6 +62,10 @@ const POSTPROCESS_PROMPT_PRESETS = {
   executive_summary: 'Reescreva esta transcrição como um resumo executivo em português do Brasil. Destaque objetivo, principais pontos discutidos, decisões, riscos, oportunidades e próximos passos em linguagem clara e concisa.',
 };
 const POSTPROCESS_RESULT_SUFFIX = 'reformulado';
+const ASSEMBLYAI_MODEL_LABELS = {
+  'universal-3-pro': 'Universal-3-pro',
+  'universal-2': 'Universal-2',
+};
 
 // ── Formatters ─────────────────────────────────────────────────────────────────
 
@@ -395,6 +401,12 @@ function getSelectedTranscriptionEngine() {
   return selected?.value || TRANSCRIPTION_ENGINES.assemblyai;
 }
 
+function getSelectedAssemblyAiModel() {
+  const selected = transcriptionEngineInputs.find(input => input.checked && input.value === TRANSCRIPTION_ENGINES.assemblyai);
+  const model = selected?.dataset?.assemblyaiModel || loadPref(PREFS.assemblyAiModel) || DEFAULT_ASSEMBLYAI_SPEECH_MODEL;
+  return ASSEMBLYAI_SPEECH_MODELS.includes(model) ? model : DEFAULT_ASSEMBLYAI_SPEECH_MODEL;
+}
+
 function getSelectedPostProcessModel() {
   const selected = postProcessModelInputs.find(input => input.checked);
   return POSTPROCESS_MODELS.includes(selected?.value) ? selected.value : DEFAULT_POSTPROCESS_MODEL;
@@ -405,6 +417,15 @@ function getTranscriptionClient(engine = getSelectedTranscriptionEngine()) {
 }
 
 function getSelectedEngineLabel(engine = getSelectedTranscriptionEngine()) {
+  return TRANSCRIPTION_ENGINE_LABELS[engine] || engine;
+}
+
+function getSelectedEngineDisplayLabel(engine = getSelectedTranscriptionEngine()) {
+  if (engine === TRANSCRIPTION_ENGINES.assemblyai) {
+    const modelLabel = ASSEMBLYAI_MODEL_LABELS[getSelectedAssemblyAiModel()] || getSelectedAssemblyAiModel();
+    return `${TRANSCRIPTION_ENGINE_LABELS[engine] || engine} (${modelLabel})`;
+  }
+
   return TRANSCRIPTION_ENGINE_LABELS[engine] || engine;
 }
 
@@ -1505,7 +1526,8 @@ async function transcribeSelectedMedia({ alwaysVersion = false } = {}) {
   const mediaName = selectedMediaEntry.name;
   const mediaHandle = selectedMediaEntry.handle;
   const engine = getSelectedTranscriptionEngine();
-  const engineLabel = getSelectedEngineLabel(engine);
+  const engineLabel = getSelectedEngineDisplayLabel(engine);
+  const model = engine === TRANSCRIPTION_ENGINES.assemblyai ? getSelectedAssemblyAiModel() : '';
   const mode = getTranscriptionMode();
   const modeLabel = TRANSCRIPTION_OUTPUT_MODE_LABELS[mode] || TRANSCRIPTION_OUTPUT_MODE_LABELS.plain;
 
@@ -1525,6 +1547,7 @@ async function transcribeSelectedMedia({ alwaysVersion = false } = {}) {
     file_name: mediaName,
     force_new_version: alwaysVersion,
     engine,
+    speech_model: model || '',
     mode,
   });
   transcriptionBusy = true;
@@ -1538,6 +1561,7 @@ async function transcribeSelectedMedia({ alwaysVersion = false } = {}) {
       prompt: getFileTranscriptionPrompt(),
       alwaysVersion,
       engine,
+      model,
       mode,
       onProgress: payload => {
         if (payload?.message) {
@@ -1553,6 +1577,7 @@ async function transcribeSelectedMedia({ alwaysVersion = false } = {}) {
     trackEvent('captura_transcription_saved', {
       file_name: mediaName,
       engine,
+      speech_model: model || '',
       transcript_name: result.fileName,
       mode,
     });
@@ -1562,7 +1587,7 @@ async function transcribeSelectedMedia({ alwaysVersion = false } = {}) {
       silent: true,
     });
   } catch (error) {
-    trackEvent('captura_transcription_error', { file_name: mediaName, engine });
+    trackEvent('captura_transcription_error', { file_name: mediaName, engine, speech_model: model || '' });
     handleTranscriptionError(error, {
       toast: true,
       dialog: false,
@@ -1655,7 +1680,8 @@ async function startLiveTranscriptionForRecording() {
   }
 
   const engine = getSelectedTranscriptionEngine();
-  const engineLabel = getSelectedEngineLabel(engine);
+  const engineLabel = getSelectedEngineDisplayLabel(engine);
+  const model = engine === TRANSCRIPTION_ENGINES.assemblyai ? getSelectedAssemblyAiModel() : '';
 
   try {
     getTranscriptionClient(engine).assertConfigured();
@@ -1686,10 +1712,11 @@ async function startLiveTranscriptionForRecording() {
       track,
       prompt: getLiveTranscriptionPrompt(),
       engine,
+      model,
       mediaFileName: api.activeFileHandle?.name || '',
     });
     setLiveTranscriptBadge('Ouvindo', 'badge bg-success');
-    trackEvent('captura_live_transcription_start', { engine });
+    trackEvent('captura_live_transcription_start', { engine, speech_model: model || '' });
   } catch (error) {
     track.stop();
     setLiveTranscriptBadge('Erro', 'badge bg-danger');
@@ -2184,9 +2211,25 @@ function restoreSimplePrefs() {
   }
 
   const savedTranscriptionEngine = loadPref(PREFS.transcriptionEngine);
+  const savedAssemblyAiModel = loadPref(PREFS.assemblyAiModel) || DEFAULT_ASSEMBLYAI_SPEECH_MODEL;
   if (savedTranscriptionEngine) {
-    const selectedEngineInput = transcriptionEngineInputs.find(input => input.value === savedTranscriptionEngine);
+    const selectedEngineInput = savedTranscriptionEngine === TRANSCRIPTION_ENGINES.assemblyai
+      ? transcriptionEngineInputs.find(input =>
+          input.value === TRANSCRIPTION_ENGINES.assemblyai &&
+          (input.dataset?.assemblyaiModel || DEFAULT_ASSEMBLYAI_SPEECH_MODEL) === savedAssemblyAiModel
+        )
+      : transcriptionEngineInputs.find(input => input.value === savedTranscriptionEngine);
     if (selectedEngineInput) selectedEngineInput.checked = true;
+    if (savedTranscriptionEngine === TRANSCRIPTION_ENGINES.assemblyai && !selectedEngineInput) {
+      const fallbackAssemblyAiInput = transcriptionEngineInputs.find(input =>
+        input.value === TRANSCRIPTION_ENGINES.assemblyai &&
+        (input.dataset?.assemblyaiModel || DEFAULT_ASSEMBLYAI_SPEECH_MODEL) === DEFAULT_ASSEMBLYAI_SPEECH_MODEL
+      );
+      if (fallbackAssemblyAiInput) fallbackAssemblyAiInput.checked = true;
+    }
+    if (savedTranscriptionEngine === TRANSCRIPTION_ENGINES.assemblyai && !loadPref(PREFS.assemblyAiModel)) {
+      savePref(PREFS.assemblyAiModel, DEFAULT_ASSEMBLYAI_SPEECH_MODEL);
+    }
   }
 
   const savedPrompt = loadPref(PREFS.transcriptionPrompt);
@@ -2382,6 +2425,11 @@ transcriptionEngineInputs.forEach(input => {
   input.addEventListener('change', () => {
     if (!input.checked) return;
     savePref(PREFS.transcriptionEngine, input.value);
+    if (input.value === TRANSCRIPTION_ENGINES.assemblyai) {
+      const assemblyAiModel = input.dataset?.assemblyaiModel || DEFAULT_ASSEMBLYAI_SPEECH_MODEL;
+      savePref(PREFS.assemblyAiModel, assemblyAiModel);
+      trackEvent('captura_pref_change', { pref: 'assemblyai_model', value: assemblyAiModel });
+    }
     trackEvent('captura_pref_change', { pref: 'transcription_engine', value: input.value });
     updateTranscriptionUiCapabilities();
     updateTranscriptionModeHint();

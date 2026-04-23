@@ -14,6 +14,7 @@ export const PREFS = {
   sysGain:  'captura-sysGain',
   liveTranscriptionEnabled: 'captura-liveTranscriptionEnabled',
   transcriptionEngine:      'captura-transcriptionEngine',
+  assemblyAiModel:          'captura-assemblyAiModel',
   transcriptionPrompt:      'captura-transcriptionPrompt',
   transcriptionMode:        'captura-transcriptionMode',
   meetingNotesPrefixEnabled: 'captura-meetingNotesPrefixEnabled',
