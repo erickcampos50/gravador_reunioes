@@ -112,6 +112,44 @@
                 </label>
               </div>
             </details>
+
+            <section id="meeting-notes-panel" class="captura-meeting-notes-panel">
+              <div class="captura-meeting-notes-header">
+                <div>
+                  <p class="captura-card-title mb-1">
+                    <i class="fas fa-pen-to-square"></i>
+                    <span>Notas da reunião</span>
+                  </p>
+                  <p id="meeting-notes-status" class="captura-side-note mb-0">
+                    Inicie a gravação para registrar notas manuais.
+                  </p>
+                </div>
+                <button id="meeting-notes-add-btn" type="button" class="captura-engine-secondary">
+                  <i class="fas fa-plus"></i>
+                  <span>Nova nota</span>
+                </button>
+              </div>
+
+              <div class="captura-meeting-notes-options">
+                <div class="captura-meeting-notes-prefix-shell">
+                  <button
+                    id="meeting-notes-prefix-btn"
+                    type="button"
+                    class="captura-meeting-notes-prefix-btn"
+                    aria-pressed="false"
+                    aria-describedby="meeting-notes-prefix-help"
+                  >
+                    <i class="fas fa-clock"></i>
+                    <span>Tempo</span>
+                  </button>
+                  <span id="meeting-notes-prefix-help" class="captura-meeting-notes-prefix-help" role="tooltip">
+                    Adiciona o tempo da reunião no começo de novas notas.
+                  </span>
+                </div>
+              </div>
+
+              <div id="meeting-notes-list" class="captura-meeting-notes-list" aria-label="Notas da reunião"></div>
+            </section>
           </div>
 
           <div class="captura-config-grid">
@@ -332,9 +370,24 @@
                   </button>
                   <button id="transcribe-new-version-btn" class="captura-engine-secondary" disabled>
                     <i class="fas fa-copy"></i>
-                  <span>Nova versão</span>
+                    <span>Nova versão</span>
                   </button>
                 </div>
+              </div>
+
+              <div id="meeting-notes-postprocess-control" class="captura-library-notes-control">
+                <label class="captura-toggle-row captura-toggle-row-compact mb-0" for="meeting-notes-postprocess-chk">
+                  <span class="captura-field-label">
+                    <i class="fas fa-file-signature"></i>
+                    Incluir notas
+                  </span>
+                  <span class="form-check form-switch m-0">
+                    <input class="form-check-input" type="checkbox" id="meeting-notes-postprocess-chk">
+                  </span>
+                </label>
+                <p id="meeting-notes-postprocess-hint" class="captura-side-note mb-0">
+                  Escolha se as notas deste arquivo entram no pós-processamento.
+                </p>
               </div>
             </div>
 

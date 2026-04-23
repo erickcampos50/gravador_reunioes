@@ -72,7 +72,9 @@ Responsabilidades:
 - identificar arquivos de mídia suportados;
 - localizar transcripts relacionados;
 - distinguir transcripts finais e transcripts ao vivo;
-- abrir e salvar versões de transcript com nomenclatura consistente.
+- abrir e salvar versões de transcript com nomenclatura consistente;
+- ler, gravar e remover notas de reunião estruturadas associadas ao arquivo original;
+- compor a visualização de transcript com o bloco de notas carregado no início do conteúdo.
 
 ### Camada OpenAI
 
@@ -112,17 +114,19 @@ Responsabilidades:
 7. Ao parar a gravação:
    - o transcript ao vivo acumulado é salvo como arquivo;
    - a transcrição final do arquivo salvo é gerada e também salva.
+8. As notas manuais criadas durante a reunião ficam persistidas em JSON estruturado ao lado da gravação e podem ser combinadas ao texto exibido.
 
 ### 3. Transcrição de arquivo selecionado
 
 1. A aplicação lista os arquivos de mídia da raiz da pasta.
 2. O usuário escolhe um item.
 3. A UI carrega player de áudio ou vídeo.
-4. A `MediaLibrary` procura transcripts relacionados.
+4. A `MediaLibrary` procura transcripts relacionados e, quando existirem, também carrega as notas estruturadas da reunião.
 5. Ao pedir transcrição:
    - se o arquivo for pequeno, ele é enviado diretamente;
    - se for grande, ele é comprimido e dividido;
    - ao final, o transcript é salvo ao lado do original, com sufixos descritivos quando o modo estruturado está ativo.
+6. O viewer mostra o bloco `Notas feitas durante a reunião` antes do transcript quando há notas importadas.
 
 ### 4. Pós-processamento do transcript
 
@@ -130,6 +134,7 @@ Responsabilidades:
 2. A aplicação envia o texto para o endpoint de responses com o prompt de pós-processamento.
 3. O resultado reformulado aparece no bloco dedicado.
 4. O usuário pode copiar o texto para a área de transferência ou salvá-lo como arquivo `-reformulado`.
+5. Se a opção `Incluir notas no pós-processamento` estiver marcada, o texto enviado ao modelo inclui o bloco de notas antes do transcript.
 
 ## Estratégia para arquivos grandes
 
@@ -166,6 +171,8 @@ Para um arquivo base `X.ext`:
   - `X-transcript-reformulado.txt`
 - resultado reformulado versionado:
   - `X-transcript-reformulado-<timestamp>.txt`
+- notas de reunião estruturadas:
+  - `X-notes.json`
 
 O timestamp segue o padrão seguro para nome de arquivo gerado por `dateStamp()`.
 
@@ -190,7 +197,9 @@ Usado para:
 - posição do PiP;
 - estado dos painéis;
 - flag de live transcript;
-- último prompt usado.
+- último prompt usado;
+- preferência para prefixar tempo nas novas notas;
+- estado temporário por arquivo para incluir notas no pós-processamento durante a sessão atual.
 
 ### Chave da OpenAI
 

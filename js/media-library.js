@@ -5,6 +5,8 @@ const VIDEO_EXTENSIONS = new Set(['mp4', 'webm']);
 const MEDIA_EXTENSIONS = new Set([...AUDIO_EXTENSIONS, ...VIDEO_EXTENSIONS]);
 const MEDIA_METADATA_SUFFIX = '-metadata';
 const MEDIA_METADATA_EXTENSION = '.json';
+const MEETING_NOTES_SUFFIX = '-notes';
+const MEETING_NOTES_EXTENSION = '.json';
 
 function getExtension(fileName) {
   const parts = fileName.toLowerCase().split('.');
@@ -25,6 +27,10 @@ function getTranscriptStem(mediaFileName, { variant = 'final', suffix = '' } = {
 
 function getMediaMetadataFileName(mediaFileName) {
   return `${getBaseName(mediaFileName)}${MEDIA_METADATA_SUFFIX}${MEDIA_METADATA_EXTENSION}`;
+}
+
+function getMeetingNotesFileName(mediaFileName) {
+  return `${getBaseName(mediaFileName)}${MEETING_NOTES_SUFFIX}${MEETING_NOTES_EXTENSION}`;
 }
 
 function escapeRegExp(text) {
@@ -72,6 +78,58 @@ function parseMediaMetadata(rawText) {
   }
 }
 
+function normalizeMeetingNoteEntry(entry, index = 0) {
+  const text = typeof entry?.text === 'string' ? entry.text.trim() : '';
+  const createdAt = typeof entry?.createdAt === 'string' ? entry.createdAt : '';
+  const updatedAt = typeof entry?.updatedAt === 'string' ? entry.updatedAt : '';
+  const meetingTimeSeconds = Number(entry?.meetingTimeSeconds);
+
+  return {
+    id: typeof entry?.id === 'string' && entry.id.trim() ? entry.id.trim() : `note-${index + 1}`,
+    text,
+    meetingTimeSeconds: Number.isFinite(meetingTimeSeconds) ? Math.max(0, Math.floor(meetingTimeSeconds)) : 0,
+    includeMeetingTime: !!entry?.includeMeetingTime,
+    createdAt,
+    updatedAt,
+  };
+}
+
+function parseMeetingNotes(rawText) {
+  const trimmed = rawText.trim();
+  if (!trimmed) {
+    return {
+      version: 1,
+      mediaFileName: '',
+      updatedAt: '',
+      notes: [],
+      raw: null,
+    };
+  }
+
+  try {
+    const data = JSON.parse(trimmed);
+    const notes = Array.isArray(data?.notes)
+      ? data.notes.map(normalizeMeetingNoteEntry).filter(note => note.text)
+      : [];
+
+    return {
+      version: Number.isFinite(Number(data?.version)) ? Number(data.version) : 1,
+      mediaFileName: typeof data?.mediaFileName === 'string' ? data.mediaFileName : '',
+      updatedAt: typeof data?.updatedAt === 'string' ? data.updatedAt : '',
+      notes,
+      raw: data,
+    };
+  } catch (_) {
+    return {
+      version: 1,
+      mediaFileName: '',
+      updatedAt: '',
+      notes: [],
+      raw: null,
+    };
+  }
+}
+
 export function isMediaFileName(fileName) {
   return MEDIA_EXTENSIONS.has(getExtension(fileName));
 }
@@ -99,6 +157,11 @@ export class MediaLibrary {
         .filter(entry => entry.name.toLowerCase().endsWith(MEDIA_METADATA_EXTENSION))
         .map(entry => [entry.name, entry])
     );
+    const notesEntries = new Map(
+      entries
+        .filter(entry => entry.name.toLowerCase().endsWith(MEETING_NOTES_EXTENSION))
+        .map(entry => [entry.name, entry])
+    );
 
     const mediaEntries = await Promise.all(
       entries
@@ -108,11 +171,19 @@ export class MediaLibrary {
           const related = transcriptEntries.filter(candidate => isTranscriptNameFor(entry.name, candidate.name));
           const metadataName = getMediaMetadataFileName(entry.name);
           const metadataEntry = metadataEntries.get(metadataName);
+          const notesName = getMeetingNotesFileName(entry.name);
+          const notesEntry = notesEntries.get(notesName);
           let eventDescription = '';
+          let notesCount = 0;
 
           if (metadataEntry) {
             const metadataFile = await metadataEntry.handle.getFile();
             eventDescription = parseMediaMetadata(await metadataFile.text()).eventDescription;
+          }
+
+          if (notesEntry) {
+            const notesFile = await notesEntry.handle.getFile();
+            notesCount = parseMeetingNotes(await notesFile.text()).notes.length;
           }
 
           return {
@@ -123,6 +194,8 @@ export class MediaLibrary {
             transcriptCount: related.length,
             eventDescription,
             eventMetadataFileName: metadataEntry ? metadataEntry.name : '',
+            notesCount,
+            notesFileName: notesEntry ? notesEntry.name : '',
           };
         })
     );
@@ -168,6 +241,25 @@ export class MediaLibrary {
     };
   }
 
+  async getMediaNotesInfo(mediaFileName) {
+    const notesFileName = getMeetingNotesFileName(mediaFileName);
+    const entries = await this.#storage.listDirectoryFileHandles();
+    const notesEntry = entries.find(entry => entry.name === notesFileName);
+
+    if (!notesEntry) return null;
+
+    const notesFile = await notesEntry.handle.getFile();
+    const parsed = parseMeetingNotes(await notesFile.text());
+    return {
+      fileName: notesEntry.name,
+      handle: notesEntry.handle,
+      lastModified: notesFile.lastModified || 0,
+      mediaFileName: parsed.mediaFileName || mediaFileName,
+      updatedAt: parsed.updatedAt || '',
+      notes: parsed.notes,
+    };
+  }
+
   async deleteMediaEventInfo(mediaFileName) {
     const fileName = getMediaMetadataFileName(mediaFileName);
     try {
@@ -196,6 +288,45 @@ export class MediaLibrary {
     }, null, 2);
     const handle = await this.#storage.writeTextFile(fileName, `${payload}\n`);
     return { fileName, handle, eventDescription: trimmed };
+  }
+
+  async deleteMeetingNotes(mediaFileName) {
+    const fileName = getMeetingNotesFileName(mediaFileName);
+    try {
+      await this.#storage.deleteFile(fileName);
+      return { fileName, deleted: true };
+    } catch (error) {
+      if (error?.name === 'NotFoundError') {
+        return { fileName, deleted: false };
+      }
+      throw error;
+    }
+  }
+
+  async writeMeetingNotes(mediaFileName, notes = []) {
+    const fileName = getMeetingNotesFileName(mediaFileName);
+    const normalizedNotes = Array.isArray(notes)
+      ? notes
+          .map((note, index) => normalizeMeetingNoteEntry(note, index))
+          .map(note => ({
+            ...note,
+            text: note.text.trim(),
+          }))
+          .filter(note => note.text)
+      : [];
+
+    if (!normalizedNotes.length) {
+      return this.deleteMeetingNotes(mediaFileName);
+    }
+
+    const payload = JSON.stringify({
+      version: 1,
+      mediaFileName,
+      updatedAt: new Date().toISOString(),
+      notes: normalizedNotes,
+    }, null, 2);
+    const handle = await this.#storage.writeTextFile(fileName, `${payload}\n`);
+    return { fileName, handle, notes: normalizedNotes };
   }
 
   async writeTranscript(mediaFileName, transcriptText, { alwaysVersion = false, variant = 'final', suffix = '' } = {}) {

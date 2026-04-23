@@ -15,6 +15,8 @@ O projeto foi inspirado no excelente [Captura Web Recorder](https://mathewsachin
 - Gera transcrição com timestamps por segmento ou diarização com rótulos dos participantes em texto legível.
 - Gera transcrição em tempo real durante a gravação.
 - Salva o transcript ao vivo e a transcrição final ao lado do arquivo original.
+- Permite registrar notas manuais da reunião com autosave em JSON importável.
+- Carrega as notas no início da transcrição com seções explícitas e permite decidir, por arquivo, se elas entram no pós-processamento.
 - Permite copiar ou salvar o resultado reformulado da transcrição.
 - Divide arquivos grandes automaticamente antes de enviar para a API da OpenAI.
 
@@ -97,6 +99,7 @@ Para um arquivo `recording-2026-04-10T10-00-00.webm`, os arquivos de transcript 
 - `recording-2026-04-10T10-00-00-transcript-diarizado.txt`
 - `recording-2026-04-10T10-00-00-transcript-live.txt`
 - `recording-2026-04-10T10-00-00-transcript-reformulado.txt`
+- `recording-2026-04-10T10-00-00-notes.json`
 - `recording-2026-04-10T10-00-00-transcript-2026-04-10T10-15-00.txt`
 - `recording-2026-04-10T10-00-00-transcript-live-2026-04-10T10-15-00.txt`
 - `recording-2026-04-10T10-00-00-transcript-reformulado-2026-04-10T10-15-00.txt`
@@ -108,6 +111,7 @@ Regras:
 - timestamps e diarização usam sufixos descritivos antes da versão timestampada;
 - o live transcript usa `-transcript-live.txt`;
 - o resultado reformulado usa `-transcript-reformulado.txt`;
+- as notas da reunião usam `-notes.json` e ficam estruturadas para reimportação;
 - a informação complementar do evento usa `-metadata.json`;
 - novas versões recebem timestamp;
 - todos os arquivos ficam na mesma pasta do original.

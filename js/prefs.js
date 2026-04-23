@@ -16,6 +16,7 @@ export const PREFS = {
   transcriptionEngine:      'captura-transcriptionEngine',
   transcriptionPrompt:      'captura-transcriptionPrompt',
   transcriptionMode:        'captura-transcriptionMode',
+  meetingNotesPrefixEnabled: 'captura-meetingNotesPrefixEnabled',
   postProcessModel:         'captura-postProcessModel',
   postProcessPrompt:        'captura-postProcessPrompt',
   openAiPanelOpen:          'captura-openAiPanelOpen',

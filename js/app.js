@@ -125,6 +125,15 @@ const transcriptionModeHintEl = document.getElementById('transcription-mode-hint
 const transcriptionStatusEl  = document.getElementById('transcription-status');
 const liveTranscriptOutputEl = document.getElementById('live-transcript-output');
 const liveTranscriptBadgeEl  = document.getElementById('live-transcript-badge');
+const meetingNotesPanelEl    = document.getElementById('meeting-notes-panel');
+const meetingNotesStatusEl   = document.getElementById('meeting-notes-status');
+const meetingNotesAddBtn     = document.getElementById('meeting-notes-add-btn');
+const meetingNotesPrefixBtn   = document.getElementById('meeting-notes-prefix-btn');
+const meetingNotesPrefixHelpEl = document.getElementById('meeting-notes-prefix-help');
+const meetingNotesPostProcessChk = document.getElementById('meeting-notes-postprocess-chk');
+const meetingNotesPostProcessControlEl = document.getElementById('meeting-notes-postprocess-control');
+const meetingNotesPostProcessHintEl = document.getElementById('meeting-notes-postprocess-hint');
+const meetingNotesListEl     = document.getElementById('meeting-notes-list');
 const refreshLibraryBtn      = document.getElementById('refresh-library-btn');
 const mediaFileListEl        = document.getElementById('media-file-list');
 const mediaDetailPanelEl     = document.getElementById('media-detail-panel');
@@ -287,6 +296,8 @@ let timerIntervalId           = null;
 let libraryEntries            = [];
 let selectedMediaEntry        = null;
 let selectedTranscriptEntries = [];
+let selectedTranscriptRawText = '';
+let selectedMediaNotesInfo    = null;
 let selectedPreviewUrl        = null;
 let pendingLiveStopPromise    = Promise.resolve('');
 let recordingTranscriptInFlight = false;
@@ -294,6 +305,19 @@ let transcriptionBusy         = false;
 let postProcessingBusy        = false;
 const selectedTranscriptNameByMedia = new Map();
 const postProcessResultsByTranscript = new Map();
+let meetingNotesSessionFileName = '';
+let meetingNotesSessionActive   = false;
+let meetingNotesEntries         = [];
+let meetingNotesDirty           = false;
+let meetingNotesSaving          = false;
+let meetingNotesQueuedSave      = false;
+let meetingNotesSaveTimerId     = null;
+let meetingNotesUiLocked        = true;
+let meetingNotesPostProcessLocked = true;
+let meetingNotesSavePromise     = Promise.resolve();
+let meetingNotesPrefixEnabled   = false;
+const meetingNotesPostProcessByMedia = new Map();
+let selectedMediaNotesLoading   = false;
 
 // ── Timer state ────────────────────────────────────────────────────────────────
 
@@ -542,6 +566,102 @@ function clearTranscriptViewer(message = 'A transcrição selecionada será exib
   transcriptViewerEl.placeholder = message;
 }
 
+function formatMeetingTimePrefix(seconds) {
+  return `[${fmtTime(Math.max(0, Math.floor(Number(seconds) || 0)))}]`;
+}
+
+function getMeetingNotesItems(notesInfo = selectedMediaNotesInfo) {
+  return Array.isArray(notesInfo?.notes) ? notesInfo.notes : [];
+}
+
+function hasMeetingNotes(notesInfo = selectedMediaNotesInfo) {
+  return getMeetingNotesItems(notesInfo).some(note => note?.text?.trim());
+}
+
+function formatMeetingNoteForDisplay(note) {
+  const text = note?.text?.trim() || '';
+  if (!text) return '';
+  return note.includeMeetingTime
+    ? `${formatMeetingTimePrefix(note.meetingTimeSeconds)} ${text}`
+    : text;
+}
+
+function getSelectedMediaNotesCacheToken() {
+  if (!hasMeetingNotes(selectedMediaNotesInfo)) return 'notes-empty';
+  const fileName = selectedMediaNotesInfo?.fileName || selectedMediaNotesInfo?.mediaFileName || '';
+  const lastModified = selectedMediaNotesInfo?.lastModified || 0;
+  const notesCount = getMeetingNotesItems(selectedMediaNotesInfo).filter(note => note?.text?.trim()).length;
+  return `${fileName}:${lastModified}:${notesCount}`;
+}
+
+const MEETING_NOTES_SECTION_HEADER = '=== NOTAS DA REUNIÃO ===';
+const TRANSCRIPT_SECTION_HEADER = '=== TRANSCRIÇÃO ===';
+
+function buildMeetingNotesSectionText(notesInfo = selectedMediaNotesInfo) {
+  const notes = getMeetingNotesItems(notesInfo)
+    .map(formatMeetingNoteForDisplay)
+    .filter(Boolean);
+
+  if (!notes.length) return '';
+  return [MEETING_NOTES_SECTION_HEADER, ...notes].join('\n\n');
+}
+
+function buildTranscriptSectionText(transcriptText = selectedTranscriptRawText) {
+  const body = transcriptText.trim();
+  if (!body) return '';
+  return [TRANSCRIPT_SECTION_HEADER, body].join('\n\n');
+}
+
+function buildCombinedTranscriptText({
+  includeNotes = true,
+  notesInfo = selectedMediaNotesInfo,
+  transcriptText = selectedTranscriptRawText,
+} = {}) {
+  const sections = [];
+  if (includeNotes) {
+    const notesSection = buildMeetingNotesSectionText(notesInfo);
+    if (notesSection) sections.push(notesSection);
+  }
+
+  const transcriptSection = buildTranscriptSectionText(transcriptText);
+  if (transcriptSection) sections.push(transcriptSection);
+
+  return sections.join('\n\n');
+}
+
+function buildTranscriptViewerText(transcriptText = selectedTranscriptRawText, notesInfo = selectedMediaNotesInfo) {
+  return buildCombinedTranscriptText({
+    includeNotes: true,
+    notesInfo,
+    transcriptText,
+  });
+}
+
+function getMeetingNotesPostProcessEnabled(mediaName = selectedMediaEntry?.name || '') {
+  if (!mediaName) return false;
+  return meetingNotesPostProcessByMedia.get(mediaName) === true;
+}
+
+function setMeetingNotesPostProcessEnabled(mediaName, enabled) {
+  if (!mediaName) return;
+  if (enabled) {
+    meetingNotesPostProcessByMedia.set(mediaName, true);
+  } else {
+    meetingNotesPostProcessByMedia.delete(mediaName);
+  }
+}
+
+function buildTranscriptProcessingText() {
+  const transcriptText = selectedTranscriptRawText.trim();
+  const mediaName = selectedMediaEntry?.name || '';
+  const notesIncluded = getMeetingNotesPostProcessEnabled(mediaName) && hasMeetingNotes();
+  return buildCombinedTranscriptText({
+    includeNotes: notesIncluded,
+    notesInfo: selectedMediaNotesInfo,
+    transcriptText,
+  });
+}
+
 function getMediaEventEmptyText() {
   return 'Clique para registrar informação complementar';
 }
@@ -621,7 +741,10 @@ async function saveMediaEventEdit(fieldEl, entry) {
 
 function getSelectedTranscriptCacheKey(mediaName = selectedMediaEntry?.name || '', transcriptName = transcriptVersionSel.value) {
   if (!mediaName || !transcriptName) return '';
-  return `${mediaName}::${transcriptName}`;
+  const notesToken = getMeetingNotesPostProcessEnabled(mediaName) && hasMeetingNotes(selectedMediaNotesInfo)
+    ? getSelectedMediaNotesCacheToken()
+    : 'notes-off';
+  return `${mediaName}::${transcriptName}::${notesToken}`;
 }
 
 function syncPostProcessOutput() {
@@ -641,7 +764,9 @@ function syncPostProcessOutput() {
   setPostProcessStatus(
     cached
       ? 'Exibindo o último texto reformulado desta versão da transcrição.'
-      : 'Adicione um prompt opcional e processe a transcrição selecionada.',
+      : getMeetingNotesPostProcessEnabled()
+        ? 'Adicione um prompt opcional e processe a transcrição selecionada com as notas da reunião incluídas.'
+        : 'Adicione um prompt opcional e processe a transcrição selecionada.',
     cached ? 'success' : 'muted'
   );
 }
@@ -649,6 +774,9 @@ function syncPostProcessOutput() {
 function clearSelectedMediaState(message = 'Selecione um arquivo da pasta escolhida para visualizar e inspecionar a transcrição e a informação complementar.') {
   selectedMediaEntry = null;
   selectedTranscriptEntries = [];
+  selectedTranscriptRawText = '';
+  selectedMediaNotesInfo = null;
+  selectedMediaNotesLoading = false;
   resetMediaPreview();
   mediaPreviewPlaceholderEl.textContent = message;
   transcriptVersionSel.innerHTML = '<option value="">Nenhuma transcrição ainda</option>';
@@ -658,7 +786,354 @@ function clearSelectedMediaState(message = 'Selecione um arquivo da pasta escolh
   postProcessOutputEl.value = '';
   updatePostProcessActionButtons();
   setPostProcessStatus('Escolha um arquivo e uma versão da transcrição para executar o pós-processamento.', 'muted');
+  renderMeetingNotesPanel();
+  syncMeetingNotesPostProcessControl();
   hideMediaDetailPanel();
+}
+
+function createMeetingNoteId() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `note-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function getMeetingNotesCanEdit() {
+  return !!meetingNotesSessionActive && !!meetingNotesSessionFileName;
+}
+
+function createMeetingNoteEntry({
+  text = '',
+  meetingTimeSeconds = elapsedSecs,
+  includeMeetingTime = meetingNotesPrefixEnabled,
+} = {}) {
+  const timestamp = new Date().toISOString();
+  return {
+    id: createMeetingNoteId(),
+    text: typeof text === 'string' ? text : '',
+    meetingTimeSeconds: Math.max(0, Math.floor(Number(meetingTimeSeconds) || 0)),
+    includeMeetingTime: !!includeMeetingTime,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+}
+
+function normalizeMeetingNotesEntries(notes = meetingNotesEntries) {
+  const timestamp = new Date().toISOString();
+  return notes
+    .map((note, index) => ({
+      id: typeof note?.id === 'string' && note.id.trim() ? note.id.trim() : `note-${index + 1}`,
+      text: typeof note?.text === 'string' ? note.text.trim() : '',
+      meetingTimeSeconds: Math.max(0, Math.floor(Number(note?.meetingTimeSeconds) || 0)),
+      includeMeetingTime: !!note?.includeMeetingTime,
+      createdAt: typeof note?.createdAt === 'string' ? note.createdAt : timestamp,
+      updatedAt: timestamp,
+    }))
+    .filter(note => note.text);
+}
+
+function setMeetingNotesStatus(message, tone = 'muted') {
+  if (!meetingNotesStatusEl) return;
+  meetingNotesStatusEl.textContent = message;
+  meetingNotesStatusEl.className = `captura-side-note mb-0 ${STATUS_CLASS[tone] || STATUS_CLASS.muted}`;
+}
+
+function clearSelectedPostProcessCacheEntries() {
+  const mediaName = selectedMediaEntry?.name || '';
+  const transcriptName = transcriptVersionSel.value || '';
+  if (!mediaName || !transcriptName) return;
+
+  const prefix = `${mediaName}::${transcriptName}::`;
+  Array.from(postProcessResultsByTranscript.keys()).forEach(key => {
+    if (key.startsWith(prefix) && !key.endsWith('::notes-off')) postProcessResultsByTranscript.delete(key);
+  });
+}
+
+function renderMeetingNotesList() {
+  if (!meetingNotesListEl) return;
+
+  meetingNotesListEl.replaceChildren();
+  const notes = meetingNotesEntries;
+  const canEdit = getMeetingNotesCanEdit() && !meetingNotesUiLocked;
+
+  if (!meetingNotesSessionFileName) {
+    const empty = document.createElement('div');
+    empty.className = 'captura-meeting-notes-empty';
+    empty.textContent = 'Inicie a gravação para registrar notas manuais.';
+    meetingNotesListEl.append(empty);
+    return;
+  }
+
+  if (!notes.length) {
+    const empty = document.createElement('div');
+    empty.className = 'captura-meeting-notes-empty';
+    empty.textContent = canEdit
+      ? 'Sem notas ainda. Clique em Nova nota para começar.'
+      : 'As notas desta reunião aparecem aqui quando houver conteúdo salvo.';
+    meetingNotesListEl.append(empty);
+    return;
+  }
+
+  notes.forEach((note, index) => {
+    const article = document.createElement('article');
+    article.className = 'captura-meeting-note';
+    article.dataset.noteId = note.id;
+    article.classList.toggle('is-empty', !note.text.trim());
+
+    const header = document.createElement('div');
+    header.className = 'captura-meeting-note-header';
+
+    const title = document.createElement('span');
+    title.className = 'captura-meeting-note-label';
+    title.textContent = `Nota ${index + 1}`;
+
+    header.append(title);
+
+    if (note.includeMeetingTime) {
+      const time = document.createElement('span');
+      time.className = 'captura-meeting-note-time';
+      time.textContent = formatMeetingTimePrefix(note.meetingTimeSeconds);
+      header.append(time);
+    }
+
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'captura-icon-button captura-meeting-note-remove';
+    removeBtn.innerHTML = '<i class="fas fa-trash-can"></i>';
+    removeBtn.title = 'Remover nota';
+    removeBtn.disabled = !canEdit;
+    removeBtn.addEventListener('click', () => {
+      if (!getMeetingNotesCanEdit()) return;
+      meetingNotesEntries = meetingNotesEntries.filter(item => item.id !== note.id);
+      meetingNotesDirty = true;
+      renderMeetingNotesPanel();
+      queueMeetingNotesSave({ immediate: true });
+    });
+    header.append(removeBtn);
+
+    const textarea = document.createElement('textarea');
+    textarea.className = 'form-control form-control-sm captura-meeting-note-textarea';
+    textarea.rows = 3;
+    textarea.placeholder = 'Escreva uma nota curta sobre a reunião.';
+    textarea.value = note.text;
+    textarea.disabled = !canEdit;
+    textarea.addEventListener('input', () => {
+      const nextValue = textarea.value;
+      note.text = nextValue;
+      note.updatedAt = new Date().toISOString();
+      article.classList.toggle('is-empty', !nextValue.trim());
+      meetingNotesDirty = true;
+      queueMeetingNotesSave();
+    });
+
+    article.append(header, textarea);
+    meetingNotesListEl.append(article);
+  });
+}
+
+function renderMeetingNotesPanel() {
+  if (!meetingNotesPanelEl || !meetingNotesAddBtn || !meetingNotesPrefixBtn || !meetingNotesStatusEl || !meetingNotesListEl) {
+    return;
+  }
+
+  const canEdit = getMeetingNotesCanEdit() && !meetingNotesUiLocked;
+  const hasSession = !!meetingNotesSessionFileName;
+  const noteCount = meetingNotesEntries.filter(note => note.text.trim()).length;
+  const savedLabel = hasSession ? meetingNotesSessionFileName : '';
+
+  meetingNotesAddBtn.disabled = !canEdit;
+  meetingNotesPrefixBtn.disabled = !canEdit;
+  meetingNotesPrefixBtn.classList.toggle('is-active', meetingNotesPrefixEnabled);
+  meetingNotesPrefixBtn.setAttribute('aria-pressed', String(meetingNotesPrefixEnabled));
+
+  if (meetingNotesSaving) {
+    setMeetingNotesStatus(`Salvando notas em ${savedLabel}…`, 'warning');
+  } else if (!hasSession) {
+    setMeetingNotesStatus('Inicie a gravação para registrar notas manuais.', 'muted');
+  } else if (noteCount > 0) {
+    setMeetingNotesStatus(
+      meetingNotesSessionActive
+        ? `${noteCount} nota${noteCount === 1 ? '' : 's'} pronta${noteCount === 1 ? '' : 's'} para esta reunião.`
+        : `${noteCount} nota${noteCount === 1 ? '' : 's'} salva${noteCount === 1 ? '' : 's'} em ${savedLabel}.`,
+      'success'
+    );
+  } else {
+    setMeetingNotesStatus(
+      meetingNotesSessionActive
+        ? 'Sem notas ainda. Clique em Nova nota para começar.'
+        : `Nenhuma nota salva em ${savedLabel}.`,
+      'muted'
+    );
+  }
+
+  renderMeetingNotesList();
+}
+
+function syncMeetingNotesPostProcessControl() {
+  if (!meetingNotesPostProcessControlEl || !meetingNotesPostProcessChk) return;
+
+  const mediaName = selectedMediaEntry?.name || '';
+  const hasNotes = !!mediaName && !selectedMediaNotesLoading && hasMeetingNotes(selectedMediaNotesInfo);
+  const checked = hasNotes ? getMeetingNotesPostProcessEnabled(mediaName) : false;
+
+  meetingNotesPostProcessControlEl.hidden = !mediaName;
+  meetingNotesPostProcessControlEl.classList.toggle('is-disabled', !hasNotes || meetingNotesPostProcessLocked);
+  meetingNotesPostProcessChk.checked = checked;
+  meetingNotesPostProcessChk.disabled = meetingNotesPostProcessLocked || selectedMediaNotesLoading || !hasNotes;
+
+  if (meetingNotesPostProcessHintEl) {
+    meetingNotesPostProcessHintEl.textContent = !mediaName
+      ? 'Selecione um arquivo para decidir se as notas entram no pós-processamento.'
+      : selectedMediaNotesLoading
+        ? 'Carregando notas deste arquivo...'
+        : hasNotes
+          ? (checked
+            ? 'As notas deste arquivo entram no pós-processamento desta sessão.'
+            : 'As notas ficam separadas do pós-processamento desta sessão.')
+          : 'Sem notas salvas para este arquivo.';
+  }
+}
+
+function startMeetingNotesSession(fileName) {
+  clearTimeout(meetingNotesSaveTimerId);
+  meetingNotesSaveTimerId = null;
+  meetingNotesQueuedSave = false;
+  meetingNotesSaving = false;
+  meetingNotesDirty = false;
+  meetingNotesSessionFileName = fileName || '';
+  meetingNotesSessionActive = !!fileName;
+  meetingNotesEntries = [];
+  meetingNotesUiLocked = false;
+  renderMeetingNotesPanel();
+}
+
+function finishMeetingNotesSession() {
+  clearTimeout(meetingNotesSaveTimerId);
+  meetingNotesSaveTimerId = null;
+  meetingNotesQueuedSave = false;
+  meetingNotesSaving = false;
+  meetingNotesDirty = false;
+  meetingNotesSessionActive = false;
+  meetingNotesUiLocked = true;
+  meetingNotesEntries = meetingNotesEntries.filter(note => note.text.trim());
+  renderMeetingNotesPanel();
+}
+
+function queueMeetingNotesSave({ immediate = false } = {}) {
+  if (!meetingNotesSessionFileName) return Promise.resolve(null);
+
+  meetingNotesDirty = true;
+  clearTimeout(meetingNotesSaveTimerId);
+  meetingNotesSaveTimerId = null;
+
+  if (immediate) {
+    meetingNotesSavePromise = saveMeetingNotesToDisk();
+    return meetingNotesSavePromise;
+  }
+
+  meetingNotesSaveTimerId = setTimeout(() => {
+    meetingNotesSavePromise = saveMeetingNotesToDisk();
+    void meetingNotesSavePromise;
+  }, 300);
+
+  return Promise.resolve(null);
+}
+
+async function flushMeetingNotesSave() {
+  clearTimeout(meetingNotesSaveTimerId);
+  meetingNotesSaveTimerId = null;
+
+  if (!meetingNotesSessionFileName) return null;
+  if (meetingNotesSaving) return meetingNotesSavePromise;
+
+  meetingNotesSavePromise = saveMeetingNotesToDisk();
+  return meetingNotesSavePromise;
+}
+
+async function saveMeetingNotesToDisk() {
+  if (!meetingNotesSessionFileName) return null;
+  if (meetingNotesSaving) {
+    meetingNotesQueuedSave = true;
+    return meetingNotesSavePromise;
+  }
+
+  meetingNotesSaving = true;
+  setMeetingNotesStatus(`Salvando notas em ${meetingNotesSessionFileName}…`, 'warning');
+
+  const notesToPersist = normalizeMeetingNotesEntries();
+  const targetFileName = meetingNotesSessionFileName;
+  let nextStatus = null;
+
+  try {
+    const dirOk = await storage.ensureAccess({
+      mode: 'readwrite',
+      silent: true,
+      requestIfNeeded: false,
+    });
+    if (!dirOk) {
+      meetingNotesDirty = true;
+      nextStatus = { message: 'Não foi possível salvar as notas agora.', tone: 'warning' };
+      return null;
+    }
+
+    let result = null;
+    if (!notesToPersist.length) {
+      result = await mediaLibrary.deleteMeetingNotes(meetingNotesSessionFileName);
+    } else {
+      result = await mediaLibrary.writeMeetingNotes(meetingNotesSessionFileName, notesToPersist);
+    }
+    meetingNotesDirty = false;
+    nextStatus = {
+      message: notesToPersist.length
+        ? `${notesToPersist.length} nota${notesToPersist.length === 1 ? '' : 's'} salva${notesToPersist.length === 1 ? '' : 's'} em ${targetFileName}.`
+        : meetingNotesSessionActive
+          ? 'Sem notas ainda. Clique em Nova nota para começar.'
+          : `Nenhuma nota salva em ${targetFileName}.`,
+      tone: notesToPersist.length ? 'success' : 'muted',
+    };
+
+    if (selectedMediaEntry?.name === meetingNotesSessionFileName) {
+      selectedMediaNotesInfo = await mediaLibrary.getMediaNotesInfo(meetingNotesSessionFileName);
+      clearSelectedPostProcessCacheEntries();
+      renderSelectedTranscriptViewer();
+      syncPostProcessOutput();
+    }
+
+    const libraryEntry = libraryEntries.find(item => item.name === meetingNotesSessionFileName);
+    if (libraryEntry) {
+      libraryEntry.notesCount = notesToPersist.length;
+      libraryEntry.notesFileName = notesToPersist.length ? `${meetingNotesSessionFileName.replace(/\.[^.]+$/, '')}-notes.json` : '';
+    }
+    renderMediaFileList();
+
+    return result;
+  } catch (error) {
+    meetingNotesDirty = true;
+    nextStatus = { message: error.message || 'Falha ao salvar notas.', tone: 'danger' };
+    return null;
+  } finally {
+    meetingNotesSaving = false;
+    if (meetingNotesQueuedSave) {
+      meetingNotesQueuedSave = false;
+      meetingNotesSavePromise = saveMeetingNotesToDisk();
+      return meetingNotesSavePromise;
+    }
+    if (nextStatus) setMeetingNotesStatus(nextStatus.message, nextStatus.tone);
+  }
+}
+
+function addMeetingNote() {
+  if (!getMeetingNotesCanEdit()) return;
+
+  meetingNotesEntries = [...meetingNotesEntries, createMeetingNoteEntry({
+    meetingTimeSeconds: elapsedSecs,
+    includeMeetingTime: meetingNotesPrefixEnabled,
+  })];
+  meetingNotesDirty = true;
+  renderMeetingNotesPanel();
+  queueMeetingNotesSave();
+  const lastNoteField = meetingNotesListEl?.querySelector('[data-note-id]:last-child textarea');
+  lastNoteField?.focus();
 }
 
 function applyPostProcessPreset(presetKey) {
@@ -720,12 +1195,20 @@ function buildMediaListItem(entry) {
     ? `${entry.transcriptCount} transcri${entry.transcriptCount === 1 ? 'ção' : 'ções'}`
     : 'Sem transcrição';
 
+  const notesLabel = document.createElement('small');
+  notesLabel.className = 'captura-library-transcripts captura-library-notes';
+  notesLabel.textContent = entry.notesCount
+    ? `${entry.notesCount} nota${entry.notesCount === 1 ? '' : 's'}`
+    : 'Sem notas';
+
   metaRow.append(
     dateLabel,
     document.createTextNode(' • '),
     sizeLabel,
     document.createTextNode(' • '),
-    transcriptLabel
+    transcriptLabel,
+    document.createTextNode(' • '),
+    notesLabel
   );
 
   const detailRow = document.createElement('div');
@@ -821,6 +1304,7 @@ function renderMediaFileList() {
   });
 
   if (!selectedMediaEntry) hideMediaDetailPanel();
+  syncMeetingNotesPostProcessControl();
 }
 
 function updateLibrarySummary() {
@@ -868,6 +1352,25 @@ async function loadMediaPreview(mediaEntry) {
   mediaPreviewPlaceholderEl.hidden = true;
 }
 
+async function loadSelectedMediaNotes(mediaFileName) {
+  try {
+    selectedMediaNotesInfo = await mediaLibrary.getMediaNotesInfo(mediaFileName);
+  } catch (_) {
+    selectedMediaNotesInfo = null;
+  }
+}
+
+function renderSelectedTranscriptViewer() {
+  const combinedText = buildTranscriptViewerText(selectedTranscriptRawText, selectedMediaNotesInfo);
+  if (!combinedText) {
+    clearTranscriptViewer('Este arquivo ainda não possui uma transcrição salva.');
+    return;
+  }
+
+  transcriptViewerEl.value = combinedText;
+  transcriptViewerEl.placeholder = 'A transcrição selecionada será exibida aqui.';
+}
+
 async function loadTranscriptEntries(mediaFileName, preferredTranscriptName = '') {
   selectedTranscriptEntries = await mediaLibrary.getRelatedTranscripts(mediaFileName);
   transcriptVersionSel.replaceChildren();
@@ -875,8 +1378,14 @@ async function loadTranscriptEntries(mediaFileName, preferredTranscriptName = ''
   if (!selectedTranscriptEntries.length) {
     transcriptVersionSel.add(new Option('Nenhuma transcrição ainda', ''));
     transcriptVersionSel.disabled = true;
-    clearTranscriptViewer('Este arquivo ainda não possui uma transcrição salva.');
-    setSelectedTranscriptStatus('Ainda não existe transcrição salva para este arquivo.', 'muted');
+    selectedTranscriptRawText = '';
+    renderSelectedTranscriptViewer();
+    setSelectedTranscriptStatus(
+      hasMeetingNotes(selectedMediaNotesInfo)
+        ? 'Ainda não existe transcrição salva para este arquivo. As notas da reunião já estão disponíveis abaixo.'
+        : 'Ainda não existe transcrição salva para este arquivo.',
+      'muted'
+    );
     syncPostProcessOutput();
     return;
   }
@@ -898,18 +1407,30 @@ async function loadSelectedTranscript() {
   const transcriptEntry = selectedTranscriptEntries.find(entry => entry.name === transcriptName);
 
   if (!transcriptEntry) {
-    clearTranscriptViewer('Este arquivo ainda não possui uma transcrição salva.');
-    setSelectedTranscriptStatus('Ainda não existe transcrição salva para este arquivo.', 'muted');
+    selectedTranscriptRawText = '';
+    renderSelectedTranscriptViewer();
+    setSelectedTranscriptStatus(
+      hasMeetingNotes(selectedMediaNotesInfo)
+        ? 'Ainda não existe transcrição salva para este arquivo. As notas da reunião já estão disponíveis abaixo.'
+        : 'Ainda não existe transcrição salva para este arquivo.',
+      'muted'
+    );
     syncPostProcessOutput();
     return;
   }
 
   const transcriptText = await mediaLibrary.readTranscript(transcriptEntry.handle);
-  transcriptViewerEl.value = transcriptText;
+  selectedTranscriptRawText = transcriptText;
+  renderSelectedTranscriptViewer();
   if (selectedMediaEntry?.name) {
     selectedTranscriptNameByMedia.set(selectedMediaEntry.name, transcriptEntry.name);
   }
-  setSelectedTranscriptStatus(`Exibindo ${transcriptEntry.name}.`, 'success');
+  setSelectedTranscriptStatus(
+    hasMeetingNotes(selectedMediaNotesInfo)
+      ? `Exibindo ${transcriptEntry.name} com notas da reunião.`
+      : `Exibindo ${transcriptEntry.name}.`,
+    'success'
+  );
   syncPostProcessOutput();
 }
 
@@ -918,12 +1439,21 @@ async function selectMediaEntryByName(mediaName, preferredTranscriptName = '') {
   if (!entry) return;
 
   selectedMediaEntry = entry;
+  selectedMediaNotesInfo = null;
+  selectedMediaNotesLoading = true;
   renderMediaFileList();
 
   try {
     await loadMediaPreview(entry);
+    await loadSelectedMediaNotes(entry.name);
+    selectedMediaNotesLoading = false;
+    syncMeetingNotesPostProcessControl();
     await loadTranscriptEntries(entry.name, preferredTranscriptName);
   } catch (error) {
+    selectedTranscriptEntries = [];
+    selectedTranscriptRawText = '';
+    selectedMediaNotesInfo = null;
+    selectedMediaNotesLoading = false;
     clearTranscriptViewer();
     setSelectedTranscriptStatus('Não foi possível carregar o arquivo selecionado.', 'danger');
     setPostProcessStatus('Não foi possível carregar a transcrição selecionada.', 'danger');
@@ -1047,7 +1577,8 @@ async function transcribeSelectedMedia({ alwaysVersion = false } = {}) {
 }
 
 async function processSelectedTranscript() {
-  if (!selectedMediaEntry || !transcriptVersionSel.value || !transcriptViewerEl.value.trim()) return;
+  const transcriptText = buildTranscriptProcessingText();
+  if (!selectedMediaEntry || !transcriptVersionSel.value || !transcriptText.trim()) return;
 
   try {
     openAiClient.assertConfigured();
@@ -1063,19 +1594,21 @@ async function processSelectedTranscript() {
   }
 
   const transcriptName = transcriptVersionSel.value;
-  const transcriptText = transcriptViewerEl.value.trim();
   const cacheKey = getSelectedTranscriptCacheKey();
   const postProcessModel = getSelectedPostProcessModel();
+  const notesIncluded = getMeetingNotesPostProcessEnabled(selectedMediaEntry.name) && hasMeetingNotes();
+  const notesSuffix = notesIncluded ? ' com notas da reunião' : '';
 
   postProcessingBusy = true;
   renderMediaFileList();
   render(machine.state);
-  setPostProcessStatus(`Processando ${transcriptName} com ${postProcessModel}…`, 'muted');
-  setTranscriptionStatus(`Processando ${transcriptName} com ${postProcessModel}…`, 'muted');
+  setPostProcessStatus(`Processando ${transcriptName}${notesSuffix} com ${postProcessModel}…`, 'muted');
+  setTranscriptionStatus(`Processando ${transcriptName}${notesSuffix} com ${postProcessModel}…`, 'muted');
   trackEvent('captura_postprocess_start', {
     file_name: selectedMediaEntry.name,
     model: postProcessModel,
     transcript_name: transcriptName,
+    notes_included: notesIncluded,
   });
 
   try {
@@ -1184,7 +1717,24 @@ async function stopLiveTranscription({ preserveBadge = false } = {}) {
 }
 
 async function finalizeSavedRecordingTranscript(fileHandle) {
-  if (!isLiveTranscriptionEnabled() || !fileHandle) {
+  if (!fileHandle) {
+    finishMeetingNotesSession();
+    setLiveTranscriptBadge('Inativo', 'badge bg-secondary');
+    return;
+  }
+
+  try {
+    await flushMeetingNotesSave();
+  } catch (error) {
+    console.warn('Falha ao salvar notas da reunião antes do pós-processamento:', error);
+  }
+
+  if (!isLiveTranscriptionEnabled()) {
+    await refreshMediaLibrary({
+      preferredMediaName: fileHandle.name,
+      silent: true,
+    }).catch(() => {});
+    finishMeetingNotesSession();
     setLiveTranscriptBadge('Inativo', 'badge bg-secondary');
     return;
   }
@@ -1252,6 +1802,7 @@ async function finalizeSavedRecordingTranscript(fileHandle) {
   } finally {
     transcriptionBusy = false;
     recordingTranscriptInFlight = false;
+    finishMeetingNotesSession();
     renderMediaFileList();
     render(machine.state);
   }
@@ -1299,6 +1850,9 @@ function render(state) {
   const lockControls = active || isStopping || isReq || transcriptionBusy || postProcessingBusy;
   const mp3Mode = isMp3Format(formatSel.value);
   const hasSelectedTranscript = selectedTranscriptEntries.length > 0 && !!transcriptVersionSel.value;
+  const notesCanEdit = !!meetingNotesSessionFileName && (isRec || isPaused) && !isStopping && !isReq && !transcriptionBusy && !postProcessingBusy;
+  meetingNotesUiLocked = !notesCanEdit;
+  meetingNotesPostProcessLocked = lockControls;
 
   pickDirBtn.disabled     = lockControls;
   webcamSel.disabled      = lockControls || mp3Mode;
@@ -1323,7 +1877,10 @@ function render(state) {
   postProcessPresetSel.disabled = lockControls;
   transcriptionEngineInputs.forEach(input => { input.disabled = lockControls; });
   postProcessModelInputs.forEach(input => { input.disabled = lockControls; });
+  if (meetingNotesAddBtn) meetingNotesAddBtn.disabled = !notesCanEdit;
   updatePostProcessActionButtons({ lockControls });
+  renderMeetingNotesPanel();
+  syncMeetingNotesPostProcessControl();
 
   statusBadge.textContent =
       isRec      ? '⏺ Gravando'
@@ -1350,6 +1907,7 @@ machine.onStateChange((state, event, payload) => {
 
   if (state === STATE.RECORDING) {
     if (event === EVENT.ENCODER_READY) {
+      startMeetingNotesSession(api.activeFileHandle?.name || '');
       trackEvent('captura_recording_start', {
         fps:         payload?.fps,
         quality:     payload?.quality,
@@ -1639,6 +2197,11 @@ function restoreSimplePrefs() {
     transcriptionModeSel.value = savedTranscriptionMode;
   }
 
+  const savedMeetingNotesPrefixEnabled = loadPref(PREFS.meetingNotesPrefixEnabled);
+  if (savedMeetingNotesPrefixEnabled !== null) {
+    meetingNotesPrefixEnabled = savedMeetingNotesPrefixEnabled === 'true';
+  }
+
   const savedPostProcessModel = loadPref(PREFS.postProcessModel);
   if (savedPostProcessModel) {
     const selectedPostProcessModel = postProcessModelInputs.find(input => input.value === savedPostProcessModel);
@@ -1831,6 +2394,34 @@ transcriptionModeSel.addEventListener('change', () => {
   trackEvent('captura_pref_change', { pref: 'transcription_mode', value: transcriptionModeSel.value });
   updateTranscriptionModeHint();
   render(machine.state);
+});
+
+meetingNotesAddBtn?.addEventListener('click', () => {
+  addMeetingNote();
+});
+
+meetingNotesPrefixBtn?.addEventListener('click', () => {
+  meetingNotesPrefixEnabled = !meetingNotesPrefixEnabled;
+  savePref(PREFS.meetingNotesPrefixEnabled, String(meetingNotesPrefixEnabled));
+  trackEvent('captura_pref_change', { pref: 'meeting_notes_prefix', value: String(meetingNotesPrefixEnabled) });
+  renderMeetingNotesPanel();
+});
+
+meetingNotesPostProcessChk?.addEventListener('change', () => {
+  const mediaName = selectedMediaEntry?.name || '';
+  if (!mediaName) {
+    meetingNotesPostProcessChk.checked = false;
+    return;
+  }
+
+  setMeetingNotesPostProcessEnabled(mediaName, meetingNotesPostProcessChk.checked);
+  trackEvent('captura_pref_change', {
+    pref: 'meeting_notes_postprocess',
+    value: String(meetingNotesPostProcessChk.checked),
+    file_name: mediaName,
+  });
+  syncMeetingNotesPostProcessControl();
+  syncPostProcessOutput();
 });
 
 postProcessModelInputs.forEach(input => {

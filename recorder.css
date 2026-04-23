@@ -471,6 +471,190 @@ body.captura-body ::selection {
   min-height: 8rem;
 }
 
+.captura-meeting-notes-panel {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  margin: 12px 0 14px;
+  border-radius: 20px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.88) 0%, rgba(247, 248, 252, 0.92) 100%);
+  border: 1px solid rgba(210, 210, 215, 0.74);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85);
+}
+
+.captura-meeting-notes-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.captura-meeting-notes-header .captura-card-title {
+  margin-bottom: 0;
+}
+
+.captura-meeting-notes-header .captura-side-note {
+  max-width: 36rem;
+}
+
+.captura-meeting-notes-options {
+  display: grid;
+  gap: 10px;
+}
+
+.captura-meeting-notes-prefix-shell {
+  position: relative;
+  display: inline-flex;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 100%;
+}
+
+.captura-meeting-notes-prefix-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0.48rem 0.82rem;
+  border-radius: 999px;
+  border: 1px solid rgba(210, 210, 215, 0.92);
+  background: var(--captura-surface);
+  color: var(--captura-text);
+  font-size: 0.82rem;
+  font-weight: 700;
+  line-height: 1;
+  transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease, background-color 160ms ease, color 160ms ease;
+}
+
+.captura-meeting-notes-prefix-btn:hover,
+.captura-meeting-notes-prefix-btn:focus-visible {
+  transform: translateY(-1px);
+  border-color: rgba(0, 102, 204, 0.24);
+  box-shadow: var(--captura-shadow-soft);
+}
+
+.captura-meeting-notes-prefix-btn.is-active {
+  background: var(--captura-info-soft);
+  border-color: rgba(0, 102, 204, 0.20);
+  color: var(--captura-accent);
+}
+
+.captura-meeting-notes-prefix-btn:disabled {
+  opacity: 0.5;
+  transform: none;
+  box-shadow: none;
+}
+
+.captura-meeting-notes-prefix-help {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 3;
+  width: max-content;
+  max-width: min(280px, 72vw);
+  padding: 0.72rem 0.85rem;
+  border-radius: 14px;
+  background: rgba(22, 22, 25, 0.94);
+  color: #FFFFFF;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  letter-spacing: 0;
+  box-shadow: 0 18px 28px rgba(0, 0, 0, 0.18);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-4px);
+  pointer-events: none;
+  transition: opacity 140ms ease, transform 140ms ease, visibility 140ms ease;
+}
+
+.captura-meeting-notes-prefix-help::before {
+  content: '';
+  position: absolute;
+  top: -6px;
+  left: 18px;
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-bottom: 6px solid rgba(22, 22, 25, 0.94);
+}
+
+.captura-meeting-notes-prefix-shell:hover .captura-meeting-notes-prefix-help,
+.captura-meeting-notes-prefix-shell:focus-within .captura-meeting-notes-prefix-help {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
+.captura-meeting-notes-list {
+  display: grid;
+  gap: 12px;
+}
+
+.captura-meeting-notes-empty {
+  padding: 16px;
+  border-radius: 16px;
+  border: 1px dashed rgba(210, 210, 215, 0.95);
+  background: rgba(242, 242, 247, 0.72);
+  color: var(--captura-text-muted);
+  font-size: 0.92rem;
+}
+
+.captura-meeting-note {
+  padding: 14px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid var(--captura-border-soft);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.78);
+}
+
+.captura-meeting-note-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.captura-meeting-note-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--captura-text-muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.captura-meeting-note-time {
+  padding: 0.28rem 0.55rem;
+  border-radius: 999px;
+  background: var(--captura-info-soft);
+  border: 1px solid rgba(0, 102, 204, 0.14);
+  color: var(--captura-accent);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.captura-meeting-note-remove {
+  width: 40px;
+  height: 40px;
+}
+
+.captura-meeting-note .form-control {
+  min-height: 5.6rem;
+  resize: vertical;
+}
+
+.captura-meeting-note.is-empty .captura-meeting-note-time {
+  background: rgba(242, 242, 247, 0.94);
+  border-color: rgba(210, 210, 215, 0.9);
+  color: var(--captura-text-muted);
+}
+
 .captura-fieldset-reset {
   margin: 0;
   padding: 0;
@@ -923,6 +1107,27 @@ body.captura-body ::selection {
   display: block;
   margin-top: 0.3rem;
   font-size: 0.78rem;
+}
+
+.captura-library-notes {
+  color: var(--captura-accent);
+}
+
+.captura-library-notes-control {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: var(--captura-surface-soft);
+  border: 1px solid var(--captura-border-soft);
+}
+
+.captura-library-notes-control.is-disabled {
+  opacity: 0.72;
+}
+
+.captura-library-notes-control .captura-side-note {
+  font-size: 0.8rem;
 }
 
 .captura-library-meta-row .captura-library-transcripts {
