@@ -375,20 +375,6 @@
                 </div>
               </div>
 
-              <div id="meeting-notes-postprocess-control" class="captura-library-notes-control">
-                <label class="captura-toggle-row captura-toggle-row-compact mb-0" for="meeting-notes-postprocess-chk">
-                  <span class="captura-field-label">
-                    <i class="fas fa-file-signature"></i>
-                    Incluir notas
-                  </span>
-                  <span class="form-check form-switch m-0">
-                    <input class="form-check-input" type="checkbox" id="meeting-notes-postprocess-chk">
-                  </span>
-                </label>
-                <p id="meeting-notes-postprocess-hint" class="captura-side-note mb-0">
-                  Escolha se as notas deste arquivo entram no pós-processamento.
-                </p>
-              </div>
             </div>
 
             <fieldset class="captura-fieldset-reset captura-inline-radio-group">
@@ -487,6 +473,20 @@
                       <input type="radio" id="postprocess-model-full" name="postprocess-model" value="gpt-5.4">
                       <span>gpt-5.4</span>
                     </label>
+                  </fieldset>
+
+                  <fieldset class="captura-fieldset-reset captura-inline-radio-group captura-postprocess-notes-group">
+                    <legend class="captura-inline-radio-label">Notas</legend>
+                    <label
+                      id="meeting-notes-postprocess-control"
+                      class="captura-inline-radio-option captura-library-notes-control"
+                    >
+                      <input class="form-check-input" type="checkbox" id="meeting-notes-postprocess-chk">
+                      <span>Incluir notas</span>
+                    </label>
+                    <p id="meeting-notes-postprocess-hint" class="captura-side-note captura-postprocess-notes-hint mb-0">
+                      Escolha se as notas deste arquivo entram no pós-processamento.
+                    </p>
                   </fieldset>
 
                   <label class="captura-field" for="postprocess-preset-select">

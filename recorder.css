@@ -1114,20 +1114,50 @@ body.captura-body ::selection {
 }
 
 .captura-library-notes-control {
-  display: grid;
-  gap: 8px;
-  padding: 12px 14px;
-  border-radius: 16px;
-  background: var(--captura-surface-soft);
-  border: 1px solid var(--captura-border-soft);
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 0;
+  padding: 0.3rem 0.65rem;
+  border-radius: 999px;
+  border: 1px solid rgba(210, 210, 215, 0.82);
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--captura-text-muted);
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 160ms ease, background-color 160ms ease, color 160ms ease, opacity 160ms ease;
+}
+
+.captura-library-notes-control:has(input:checked) {
+  border-color: rgba(0, 102, 204, 0.24);
+  background: rgba(0, 102, 204, 0.08);
+  color: var(--captura-accent);
+}
+
+.captura-library-notes-control .form-check-input {
+  width: 0.85rem;
+  height: 0.85rem;
+  margin: 0;
+  flex: 0 0 auto;
+  accent-color: var(--captura-accent);
 }
 
 .captura-library-notes-control.is-disabled {
   opacity: 0.72;
 }
 
-.captura-library-notes-control .captura-side-note {
+.captura-postprocess-notes-group {
+  margin-top: 10px;
+  gap: 8px;
+  align-items: center;
+}
+
+.captura-postprocess-notes-hint {
+  flex-basis: 100%;
+  max-width: 44rem;
   font-size: 0.8rem;
+  color: var(--captura-text-muted);
 }
 
 .captura-library-meta-row .captura-library-transcripts {

@@ -1003,6 +1003,7 @@ function syncMeetingNotesPostProcessControl() {
   meetingNotesPostProcessChk.disabled = meetingNotesPostProcessLocked || selectedMediaNotesLoading || !hasNotes;
 
   if (meetingNotesPostProcessHintEl) {
+    meetingNotesPostProcessHintEl.hidden = !mediaName;
     meetingNotesPostProcessHintEl.textContent = !mediaName
       ? 'Selecione um arquivo para decidir se as notas entram no pós-processamento.'
       : selectedMediaNotesLoading
