@@ -28,6 +28,38 @@
 
 <div id="toast-container" class="toast-container position-fixed bottom-0 end-0 p-3"></div>
 
+<div id="auth-gate" class="captura-auth-screen">
+  <section class="captura-auth-card" aria-labelledby="auth-gate-title">
+    <div>
+      <p class="captura-panel-kicker mb-2">Acesso protegido</p>
+      <h1 id="auth-gate-title" class="captura-page-title captura-auth-title">Entrar na ferramenta</h1>
+      
+    </div>
+
+    <form id="auth-gate-form" class="captura-auth-form" autocomplete="on">
+      <label class="captura-field" for="auth-password-input">
+        <span class="captura-field-label">Senha de acesso</span>
+        <input
+          id="auth-password-input"
+          name="password"
+          type="password"
+          class="form-control form-control-lg captura-auth-password"
+          autocomplete="current-password"
+          placeholder="Digite a senha"
+          spellcheck="false"
+          autofocus
+        >
+      </label>
+
+      <button id="auth-submit-btn" type="submit" class="btn btn-primary btn-lg captura-auth-submit">
+        Entrar
+      </button>
+
+      <div id="auth-gate-status" class="captura-inline-status small text-danger" aria-live="polite"></div>
+    </form>
+  </section>
+</div>
+
 <dialog id="captura-error-dialog" aria-labelledby="captura-error-title">
   <div class="captura-dialog-content">
     <button type="button" class="captura-dialog-close" id="captura-error-close" aria-label="Fechar">&times;</button>
@@ -44,7 +76,7 @@
   </div>
 </dialog>
 
-<main class="captura-shell">
+<main class="captura-shell" hidden>
   <div id="tool-main-content" class="captura-workspace">
     <div class="captura-session-header google-anno-skip">
       <div>

@@ -65,6 +65,78 @@ body.captura-body ::selection {
   padding: 40px 48px 64px;
 }
 
+body.captura-auth-locked {
+  overflow: hidden;
+}
+
+.captura-shell[hidden],
+.captura-auth-screen[hidden] {
+  display: none !important;
+}
+
+.captura-auth-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 4000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background:
+    radial-gradient(circle at 0% 0%, rgba(0, 102, 204, 0.14), transparent 30%),
+    radial-gradient(circle at 100% 0%, rgba(40, 205, 65, 0.10), transparent 24%),
+    linear-gradient(180deg, rgba(245, 245, 247, 0.92) 0%, rgba(238, 240, 244, 0.98) 100%);
+  backdrop-filter: blur(20px) saturate(180%);
+}
+
+.captura-auth-card {
+  width: min(560px, 100%);
+  display: grid;
+  gap: 22px;
+  padding: 32px;
+  border-radius: var(--captura-radius-xl);
+  background: var(--captura-surface-elevated);
+  border: 1px solid var(--captura-border-soft);
+  box-shadow: var(--captura-shadow-lg);
+}
+
+.captura-auth-title {
+  margin-top: 0;
+}
+
+.captura-auth-note {
+  color: var(--captura-text-muted);
+  font-size: 0.92rem;
+}
+
+.captura-auth-note code {
+  color: var(--captura-text);
+  background: var(--captura-surface-soft);
+  padding: 0.08rem 0.38rem;
+  border-radius: 999px;
+}
+
+.captura-auth-form {
+  display: grid;
+  gap: 14px;
+}
+
+.captura-auth-password {
+  padding-top: 0.95rem;
+  padding-bottom: 0.95rem;
+  border-radius: 16px;
+  font-size: 1rem;
+}
+
+.captura-auth-submit {
+  width: 100%;
+  border-radius: 999px;
+  font-weight: 600;
+}
+
+.captura-auth-form .captura-inline-status {
+  min-height: 1.25rem;
+}
+
 .captura-header {
   display: flex;
   align-items: center;

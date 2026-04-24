@@ -62,6 +62,11 @@ const POSTPROCESS_PROMPT_PRESETS = {
   executive_summary: 'Reescreva esta transcrição como um resumo executivo em português do Brasil. Destaque objetivo, principais pontos discutidos, decisões, riscos, oportunidades e próximos passos em linguagem clara e concisa.',
 };
 const POSTPROCESS_RESULT_SUFFIX = 'reformulado';
+const AUTH_FILE_NAME = 'captura-acesso.txt';
+const AUTH_SESSION_KEY = 'captura-auth-session';
+const AUTH_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const AUTH_DERIVED_BYTES = 32;
+const AUTH_GATE_DESCRIPTION = 'O acesso fica salvo por 30 dias neste navegador.';
 const ASSEMBLYAI_MODEL_LABELS = {
   'universal-3-pro': 'Universal-3-pro',
   'universal-2': 'Universal-2',
@@ -131,6 +136,13 @@ const transcriptionModeHintEl = document.getElementById('transcription-mode-hint
 const transcriptionStatusEl  = document.getElementById('transcription-status');
 const liveTranscriptOutputEl = document.getElementById('live-transcript-output');
 const liveTranscriptBadgeEl  = document.getElementById('live-transcript-badge');
+const authGateEl             = document.getElementById('auth-gate');
+const authGateFormEl         = document.getElementById('auth-gate-form');
+const authGateDescriptionEl  = document.getElementById('auth-gate-description');
+const authGateStatusEl       = document.getElementById('auth-gate-status');
+const authPasswordInputEl    = document.getElementById('auth-password-input');
+const authSubmitBtn          = document.getElementById('auth-submit-btn');
+const appShellEl             = document.querySelector('.captura-shell');
 const meetingNotesPanelEl    = document.getElementById('meeting-notes-panel');
 const meetingNotesStatusEl   = document.getElementById('meeting-notes-status');
 const meetingNotesAddBtn     = document.getElementById('meeting-notes-add-btn');
@@ -324,6 +336,14 @@ let meetingNotesSavePromise     = Promise.resolve();
 let meetingNotesPrefixEnabled   = false;
 const meetingNotesPostProcessByMedia = new Map();
 let selectedMediaNotesLoading   = false;
+let authLoadPromise             = null;
+let authRecords                 = [];
+let authFingerprint            = '';
+let authUnlocked               = false;
+let authBootstrapDone          = false;
+let authSubmitPending          = false;
+let pageViewTracked            = false;
+let deviceChangeListenerAttached = false;
 
 // ── Timer state ────────────────────────────────────────────────────────────────
 
@@ -508,6 +528,334 @@ function updatePostProcessActionButtons({ lockControls = false } = {}) {
   const hasOutput = !!postProcessOutputEl.value.trim();
   if (postProcessCopyBtn) postProcessCopyBtn.disabled = lockControls || !hasOutput;
   if (postProcessSaveBtn) postProcessSaveBtn.disabled = lockControls || !hasOutput;
+}
+
+// ── Authentication gate ───────────────────────────────────────────────────────
+
+const authTextEncoder = new TextEncoder();
+
+function bytesToHex(bytes) {
+  return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function base64ToBytes(text) {
+  try {
+    const binary = atob(text.trim());
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index++) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+    return bytes;
+  } catch (_) {
+    return null;
+  }
+}
+
+function normalizeAuthFileText(text = '') {
+  return String(text || '').replace(/\r\n/g, '\n');
+}
+
+function parseAuthFileRecords(rawText) {
+  return normalizeAuthFileText(rawText)
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => line && !line.startsWith('#'))
+    .map((line, index) => {
+      const parts = line.split('|');
+      if (parts.length < 4) return null;
+
+      const label = parts[0].trim() || `acesso-${index + 1}`;
+      const iterations = Number(parts[1]);
+      const salt = base64ToBytes(parts[2]);
+      const hash = base64ToBytes(parts[3]);
+
+      if (!Number.isInteger(iterations) || iterations <= 0 || !salt || !hash) {
+        return null;
+      }
+
+      return {
+        label,
+        iterations,
+        salt,
+        hash,
+      };
+    })
+    .filter(Boolean);
+}
+
+async function digestAuthFileText(rawText) {
+  const digest = await crypto.subtle.digest('SHA-256', authTextEncoder.encode(normalizeAuthFileText(rawText)));
+  return bytesToHex(new Uint8Array(digest));
+}
+
+async function deriveAuthPasswordHash(password, record) {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    authTextEncoder.encode(password),
+    'PBKDF2',
+    false,
+    ['deriveBits']
+  );
+
+  const bits = await crypto.subtle.deriveBits(
+    {
+      name: 'PBKDF2',
+      hash: 'SHA-256',
+      salt: record.salt,
+      iterations: record.iterations,
+    },
+    key,
+    AUTH_DERIVED_BYTES * 8
+  );
+
+  return new Uint8Array(bits);
+}
+
+function constantTimeEquals(a, b) {
+  if (!(a instanceof Uint8Array) || !(b instanceof Uint8Array)) return false;
+  if (a.length !== b.length) return false;
+
+  let diff = 0;
+  for (let index = 0; index < a.length; index++) {
+    diff |= a[index] ^ b[index];
+  }
+  return diff === 0;
+}
+
+async function verifyAuthPassword(password, records = authRecords) {
+  const candidate = typeof password === 'string' ? password.trim() : '';
+  if (!candidate || !Array.isArray(records) || !records.length) {
+    return null;
+  }
+
+  for (const record of records) {
+    const derived = await deriveAuthPasswordHash(candidate, record);
+    if (constantTimeEquals(derived, record.hash)) {
+      return record;
+    }
+  }
+
+  return null;
+}
+
+function loadAuthSession() {
+  try {
+    const raw = localStorage.getItem(AUTH_SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    if (typeof parsed.fingerprint !== 'string') return null;
+    if (!Number.isFinite(parsed.expiresAt)) return null;
+    return parsed;
+  } catch (_) {
+    return null;
+  }
+}
+
+function saveAuthSession() {
+  if (!authFingerprint) return;
+
+  try {
+    localStorage.setItem(AUTH_SESSION_KEY, JSON.stringify({
+      version: 1,
+      fingerprint: authFingerprint,
+      expiresAt: Date.now() + AUTH_SESSION_TTL_MS,
+    }));
+  } catch (_) {}
+}
+
+function clearAuthSession() {
+  try {
+    localStorage.removeItem(AUTH_SESSION_KEY);
+  } catch (_) {}
+}
+
+function isAuthSessionValid(session, fingerprint = '') {
+  return !!session
+    && typeof session.fingerprint === 'string'
+    && Number.isFinite(session.expiresAt)
+    && session.expiresAt > Date.now()
+    && (!fingerprint || session.fingerprint === fingerprint);
+}
+
+function setAuthStatus(message, tone = 'muted') {
+  if (!authGateStatusEl) return;
+  authGateStatusEl.textContent = message;
+  authGateStatusEl.className = `captura-inline-status small ${STATUS_CLASS[tone] || STATUS_CLASS.muted}`;
+}
+
+function setAuthInteractive(interactive) {
+  if (authPasswordInputEl) authPasswordInputEl.disabled = !interactive;
+  if (authSubmitBtn) authSubmitBtn.disabled = !interactive;
+}
+
+function showAuthGate(message = AUTH_GATE_DESCRIPTION, tone = 'muted', interactive = true) {
+  authUnlocked = false;
+  if (authGateEl) authGateEl.hidden = false;
+  if (appShellEl) appShellEl.hidden = true;
+  document.body.classList.add('captura-auth-locked');
+
+  if (authGateDescriptionEl) authGateDescriptionEl.textContent = AUTH_GATE_DESCRIPTION;
+  setAuthStatus(message, tone);
+  setAuthInteractive(interactive);
+
+  if (interactive && authPasswordInputEl) {
+    authPasswordInputEl.focus();
+    authPasswordInputEl.select?.();
+  }
+}
+
+function showMainApp() {
+  if (authGateEl) authGateEl.hidden = true;
+  if (appShellEl) appShellEl.hidden = false;
+  document.body.classList.remove('captura-auth-locked');
+}
+
+function trackPageViewOnce() {
+  if (pageViewTracked) return;
+  pageViewTracked = true;
+  trackEvent('captura_page_view', {
+    has_screen_capture:  hasGetDisplayMedia,
+    has_file_system_api: hasFSA,
+  });
+}
+
+async function loadAuthRecords() {
+  if (!authLoadPromise) {
+    authLoadPromise = (async () => {
+      const response = await fetch(`./${AUTH_FILE_NAME}`, { cache: 'no-store' });
+      if (!response.ok) {
+        throw new Error(`Não foi possível carregar ${AUTH_FILE_NAME} (HTTP ${response.status}).`);
+      }
+
+      const rawText = await response.text();
+      const records = parseAuthFileRecords(rawText);
+      if (!records.length) {
+        throw new Error(`Nenhuma senha válida foi encontrada em ${AUTH_FILE_NAME}.`);
+      }
+
+      const fingerprint = await digestAuthFileText(rawText);
+      authRecords = records;
+      authFingerprint = fingerprint;
+      return { records, fingerprint, rawText };
+    })().catch(error => {
+      authLoadPromise = null;
+      throw error;
+    });
+  }
+
+  return authLoadPromise;
+}
+
+async function postAuthBootstrap() {
+  if (authBootstrapDone) return;
+  authBootstrapDone = true;
+
+  trackPageViewOnce();
+
+  if (hasGetDisplayMedia && !deviceChangeListenerAttached) {
+    deviceChangeListenerAttached = true;
+    navigator.mediaDevices.addEventListener('devicechange', enumerateDevices);
+    void enumerateDevices();
+  }
+
+  api.restartPreviews();
+  await initializeStorageAndLibrary();
+  render(machine.state);
+}
+
+async function unlockApplication() {
+  if (!authFingerprint) {
+    throw new Error('Não foi possível confirmar o acesso porque o arquivo de senhas não foi carregado.');
+  }
+
+  authUnlocked = true;
+  saveAuthSession();
+  showMainApp();
+  setAuthStatus('Acesso liberado. Carregando a ferramenta…', 'success');
+  setAuthInteractive(false);
+  await postAuthBootstrap();
+}
+
+async function initializeAuthentication() {
+  showAuthGate('Verificando acesso salvo…', 'muted', false);
+
+  const rememberedSession = loadAuthSession();
+  const rememberedSessionValid = isAuthSessionValid(rememberedSession);
+
+  try {
+    await loadAuthRecords();
+  } catch (error) {
+    if (rememberedSessionValid) {
+      authFingerprint = rememberedSession.fingerprint;
+      authRecords = [];
+      try {
+        await unlockApplication();
+        return;
+      } catch (unlockError) {
+        clearAuthSession();
+        showAuthGate(unlockError.message || 'Não foi possível validar o acesso salvo.', 'danger', true);
+        return;
+      }
+    }
+
+    showAuthGate(error.message || `Não foi possível carregar ${AUTH_FILE_NAME}.`, 'danger', false);
+    return;
+  }
+
+  if (rememberedSessionValid) {
+    if (rememberedSession.fingerprint === authFingerprint) {
+      try {
+        await unlockApplication();
+        return;
+      } catch (error) {
+        clearAuthSession();
+        showAuthGate(error.message || 'Não foi possível validar o acesso salvo.', 'danger', true);
+        return;
+      }
+    }
+
+    clearAuthSession();
+  } else if (rememberedSession) {
+    clearAuthSession();
+  }
+
+  showAuthGate(AUTH_GATE_DESCRIPTION, 'muted', true);
+}
+
+async function handleAuthSubmit(event) {
+  event.preventDefault();
+  if (authSubmitPending) return;
+
+  const password = authPasswordInputEl?.value || '';
+  if (!password.trim()) {
+    setAuthStatus('Digite uma senha para continuar.', 'danger');
+    authPasswordInputEl?.focus();
+    return;
+  }
+
+  authSubmitPending = true;
+  setAuthStatus('Verificando senha…', 'muted');
+  setAuthInteractive(false);
+
+  try {
+    const match = await verifyAuthPassword(password, authRecords);
+    if (!match) {
+      if (authPasswordInputEl) authPasswordInputEl.value = '';
+      setAuthStatus('Senha incorreta. Tente novamente.', 'danger');
+      setAuthInteractive(true);
+      authPasswordInputEl?.focus();
+      return;
+    }
+
+    await unlockApplication();
+  } catch (error) {
+    setAuthStatus(error.message || 'Não foi possível validar a senha.', 'danger');
+    setAuthInteractive(true);
+    authPasswordInputEl?.focus();
+  } finally {
+    authSubmitPending = false;
+  }
 }
 
 async function copyTextToClipboard(text) {
@@ -1490,6 +1838,7 @@ async function refreshMediaLibrary({
   preferredTranscriptName = '',
   silent = false,
 } = {}) {
+  if (!authUnlocked) return;
   if (!storage.dirHandle) {
     libraryEntries = [];
     clearSelectedMediaState();
@@ -2273,7 +2622,7 @@ function restoreDevicePrefs() {
 }
 
 async function initializeStorageAndLibrary() {
-  if (!hasFSA) return;
+  if (!hasFSA || !authUnlocked) return;
   await storage.init();
   await refreshMediaLibrary({ silent: true });
 }
@@ -2305,19 +2654,8 @@ clearSelectedMediaState();
 setTranscriptionStatus('Nenhuma transcrição em andamento.', 'muted');
 setLiveTranscriptBadge('Inativo', 'badge bg-secondary');
 setPostProcessStatus('Escolha um arquivo e uma versão da transcrição para executar o pós-processamento.', 'muted');
-
-trackEvent('captura_page_view', {
-  has_screen_capture:  hasGetDisplayMedia,
-  has_file_system_api: hasFSA,
-});
-
-if (hasGetDisplayMedia) {
-  navigator.mediaDevices.addEventListener('devicechange', enumerateDevices);
-  void enumerateDevices();
-}
-
-api.restartPreviews();
-void initializeStorageAndLibrary();
+showAuthGate('Verificando acesso salvo…', 'muted', false);
+void initializeAuthentication();
 
 // ── Event listeners ────────────────────────────────────────────────────────────
 
@@ -2510,6 +2848,10 @@ postProcessSaveBtn.addEventListener('click', async () => {
       updateLivePane: false,
     });
   }
+});
+
+authGateFormEl?.addEventListener('submit', event => {
+  void handleAuthSubmit(event);
 });
 
 errorDialog?.addEventListener('close', () => {

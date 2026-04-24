@@ -2,7 +2,7 @@
  * Cache-First strategy with versioned cache and user-controlled update flow.
  */
 
-const CACHE_NAME = 'captura-v2.4.1';
+const CACHE_NAME = 'captura-v2.4.2';
 
 // Local assets that must be available offline.
 // External CDN resources are cached dynamically on first request.
@@ -66,6 +66,12 @@ self.addEventListener('activate', event => {
 // cache the fresh response for future offline use.
 self.addEventListener('fetch', event => {
   if (event.request.method !== 'GET') return;
+
+  const requestUrl = new URL(event.request.url);
+  if (requestUrl.pathname.endsWith('/captura-acesso.txt')) {
+    event.respondWith(fetch(new Request(event.request, { cache: 'no-store' })));
+    return;
+  }
 
   event.respondWith(
     caches.match(event.request).then(cached => {

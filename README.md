@@ -19,6 +19,7 @@ O projeto foi inspirado no excelente [Captura Web Recorder](https://mathewsachin
 - Carrega as notas no início da transcrição com seções explícitas e permite decidir, por arquivo, se elas entram no pós-processamento.
 - Permite copiar ou salvar o resultado reformulado da transcrição.
 - Divide arquivos grandes automaticamente antes de enviar para a API da OpenAI.
+- Exige uma senha simples na abertura e lembra o acesso neste navegador por 30 dias.
 
 ## Requisitos
 
@@ -68,6 +69,12 @@ http://localhost:4173
 7. Use `Generate New Version` para criar uma nova versão sem sobrescrever a anterior.
 8. No bloco `Resultado reformulado`, copie ou salve o texto com os botões discretos ao lado do título.
 
+### Acesso à ferramenta
+
+1. Ao abrir a página, digite uma das senhas liberadas na tela de login.
+2. Se o navegador já tiver um acesso válido salvo, a ferramenta abre direto.
+3. O acesso fica lembrado por 30 dias neste navegador.
+
 ### Live transcript
 
 1. Preencha a chave da OpenAI.
@@ -89,6 +96,34 @@ O campo `Transcription prompt` existe para melhorar a qualidade da transcrição
 - estilo linguístico desejado.
 
 O último prompt fica salvo no navegador em `localStorage`.
+
+## Controle de acesso
+
+O acesso por senha foi pensado para o cenário do GitHub Pages: o site publicado não carrega senhas em texto puro, apenas um arquivo hash-only com salt e iterações.
+
+Fluxo de manutenção:
+
+1. Edite `captura-acesso.source.txt` no seu computador.
+2. Rode:
+
+```bash
+node scripts/generate-auth-file.js
+```
+
+3. Publique o arquivo gerado `captura-acesso.txt` junto com a aplicação.
+
+Formato do arquivo publicado:
+
+```text
+label|iterations|saltB64|hashB64
+```
+
+Notas:
+
+- `captura-acesso.source.txt` fica só localmente e está ignorado pelo Git.
+- `captura-acesso.txt` é o arquivo publicado que o navegador baixa para validar o login.
+- Quando esse arquivo muda, o acesso lembrado no navegador perde validade.
+- Isso é um gate client-side para reduzir acesso casual, não um backend de autenticação forte.
 
 ## Como os arquivos são salvos
 
