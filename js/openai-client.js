@@ -5,7 +5,6 @@ export const ASSEMBLYAI_SPEECH_MODELS = [
   'universal-3-pro',
   'universal-2',
 ];
-export const DEFAULT_ASSEMBLYAI_SPEECH_MODEL = ASSEMBLYAI_SPEECH_MODELS[0];
 
 const OPENAI_TRANSCRIPTION_MODELS = [
   'gpt-4o-transcribe',
@@ -542,12 +541,12 @@ export class AssemblyAIClientManager {
     return apiKey;
   }
 
-  async transcribeFile({ file, signal, model = DEFAULT_ASSEMBLYAI_SPEECH_MODEL } = {}) {
+  async transcribeFile({ file, signal } = {}) {
     if (!(file instanceof File)) {
       throw new Error('Nenhum arquivo de áudio foi enviado para transcrição.');
     }
 
-    const result = await this.#runTranscription({ file, signal, speakerLabels: false, model });
+    const result = await this.#runTranscription({ file, signal, speakerLabels: false });
     return typeof result?.text === 'string' ? result.text.trim() : '';
   }
 
@@ -555,7 +554,6 @@ export class AssemblyAIClientManager {
     file,
     signal,
     mode = TRANSCRIPTION_OUTPUT_MODES.diarized,
-    model = DEFAULT_ASSEMBLYAI_SPEECH_MODEL,
   } = {}) {
     if (!(file instanceof File)) {
       throw new Error('Nenhum arquivo de áudio foi enviado para transcrição.');
@@ -564,10 +562,7 @@ export class AssemblyAIClientManager {
       throw new Error(`Modo de transcrição estruturada inválido para AssemblyAI: ${mode}.`);
     }
 
-    const selectedSpeechModel = ASSEMBLYAI_SPEECH_MODELS.includes(model)
-      ? model
-      : DEFAULT_ASSEMBLYAI_SPEECH_MODEL;
-    const result = await this.#runTranscription({ file, signal, speakerLabels: true, model: selectedSpeechModel });
+    const result = await this.#runTranscription({ file, signal, speakerLabels: true });
     const utterances = Array.isArray(result?.utterances) ? result.utterances : [];
     const segments = utterances
       .map((utterance, index) => {
@@ -594,17 +589,17 @@ export class AssemblyAIClientManager {
       text: typeof result?.text === 'string' ? result.text.trim() : '',
       raw: result,
       segments,
-      model: selectedSpeechModel,
+      speechModels: [...ASSEMBLYAI_SPEECH_MODELS],
     };
   }
 
-  async #runTranscription({ file, signal, speakerLabels = false, model = DEFAULT_ASSEMBLYAI_SPEECH_MODEL } = {}) {
+  async #runTranscription({ file, signal, speakerLabels = false } = {}) {
     const apiKey = this.assertConfigured();
     const { signal: requestSignal, timedOut, cleanup } = createRequestSignal(signal, ASSEMBLYAI_REQUEST_TIMEOUT_MS);
 
     try {
       const audioUrl = await this.#uploadFile(file, apiKey, requestSignal);
-      const transcriptId = await this.#createTranscript(audioUrl, apiKey, requestSignal, { speakerLabels, model });
+      const transcriptId = await this.#createTranscript(audioUrl, apiKey, requestSignal, { speakerLabels });
       if (!transcriptId) {
         throw new Error('A AssemblyAI não retornou um identificador de transcrição.');
       }
@@ -660,11 +655,7 @@ export class AssemblyAIClientManager {
     return audioUrl;
   }
 
-  async #createTranscript(audioUrl, apiKey, signal, { speakerLabels = false, model = DEFAULT_ASSEMBLYAI_SPEECH_MODEL } = {}) {
-    const selectedSpeechModel = ASSEMBLYAI_SPEECH_MODELS.includes(model)
-      ? model
-      : DEFAULT_ASSEMBLYAI_SPEECH_MODEL;
-
+  async #createTranscript(audioUrl, apiKey, signal, { speakerLabels = false } = {}) {
     const transcriptResponse = await fetch(`${ASSEMBLYAI_BASE_URL}/v2/transcript`, {
       method: 'POST',
       headers: {
@@ -674,7 +665,7 @@ export class AssemblyAIClientManager {
       body: JSON.stringify({
         audio_url: audioUrl,
         language_detection: true,
-        speech_models: [selectedSpeechModel],
+        speech_models: [...ASSEMBLYAI_SPEECH_MODELS],
         ...(speakerLabels ? { speaker_labels: true } : {}),
       }),
       signal,
