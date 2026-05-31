@@ -637,6 +637,7 @@ export class TranscriptionController {
         '-b:a', NORMALIZED_BITRATE,
         normalizedName,
       ]);
+      await new Promise(r => setTimeout(r, 0));
 
       const normalizedData = await ffmpeg.readFile(normalizedName);
       const normalizedFile = blobToFile(
@@ -685,6 +686,7 @@ export class TranscriptionController {
         const chunkFile = blobToFile(new Blob([chunkData], { type: 'audio/mpeg' }), `${file.name.replace(/\.[^.]+$/, '')}-part-${chunkIndex}.mp3`, 'audio/mpeg');
         chunks.push(includeOffsets ? { file: chunkFile, startSeconds: start } : chunkFile);
         await ffmpeg.deleteFile(outputName).catch(() => {});
+        await new Promise(r => setTimeout(r, 0));
       }
 
       return chunks;

@@ -159,6 +159,7 @@ const mediaPreviewPlaceholderEl = document.getElementById('media-preview-placeho
 const transcribeSelectedBtn  = document.getElementById('transcribe-selected-btn');
 const transcribeNewVersionBtn = document.getElementById('transcribe-new-version-btn');
 const transcriptVersionSel   = document.getElementById('transcript-version-select');
+const transcriptVersionLabel = transcriptVersionSel?.closest('label');
 const selectedTranscriptStatusEl = document.getElementById('selected-transcript-status');
 const transcriptViewerEl     = document.getElementById('transcript-viewer');
 const processSelectedTranscriptBtn = document.getElementById('process-selected-transcript-btn');
@@ -472,6 +473,7 @@ function updateTranscriptionUiCapabilities() {
   const client = getTranscriptionClient();
   const supportedModes = getSupportedTranscriptionModes(client);
   const supportsPrompt = client?.supportsPrompt !== false;
+  const isOpenAi = getSelectedTranscriptionEngine() === TRANSCRIPTION_ENGINES.openai;
 
   Array.from(transcriptionModeSel.options).forEach(option => {
     option.disabled = !supportedModes.has(option.value);
@@ -487,6 +489,9 @@ function updateTranscriptionUiCapabilities() {
   transcriptionPromptEl.placeholder = supportsPrompt
     ? 'Ex.: Preserve termos técnicos, siglas, nomes próprios e contexto específico desta mídia durante a transcrição.'
     : 'Disponível quando o motor OpenAI estiver selecionado.';
+
+  if (transcriptVersionLabel) transcriptVersionLabel.hidden = !isOpenAi;
+  if (transcribeNewVersionBtn) transcribeNewVersionBtn.hidden = true;
 }
 
 function updateTranscriptionModeHint() {
@@ -1632,6 +1637,9 @@ function buildMediaListItem(entry) {
 }
 
 function renderMediaFileList() {
+  const scrollTop = mediaFileListEl.scrollTop;
+  const activeEntryName = selectedMediaEntry?.name;
+
   mediaFileListEl.replaceChildren();
 
   if (!libraryEntries.length) {
@@ -1646,7 +1654,7 @@ function renderMediaFileList() {
 
   libraryEntries.forEach(entry => {
     const { article, item } = buildMediaListItem(entry);
-    const isDisabled = transcriptionBusy || postProcessingBusy;
+    const isDisabled = postProcessingBusy;
     item.classList.toggle('is-disabled', isDisabled);
     item.setAttribute('aria-disabled', String(isDisabled));
     item.tabIndex = isDisabled ? -1 : 0;
@@ -1661,6 +1669,11 @@ function renderMediaFileList() {
 
   if (!selectedMediaEntry) hideMediaDetailPanel();
   syncMeetingNotesPostProcessControl();
+
+  if (activeEntryName) {
+    const activeEl = mediaFileListEl.querySelector(`[data-name="${activeEntryName}"]`)?.closest('article');
+    if (activeEl) activeEl.scrollIntoView({ behavior: 'instant', block: 'nearest' });
+  }
 }
 
 function updateLibrarySummary() {
