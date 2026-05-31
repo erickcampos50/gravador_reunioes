@@ -280,7 +280,7 @@ class RollingTranscriptionSession {
   #mediaLibrary;
   #mediaFileName = '';
   #prompt = '';
-  #model = '';
+  #speechModels = null;
   #audioContext = null;
   #sourceNode = null;
   #processorNode = null;
@@ -299,11 +299,11 @@ class RollingTranscriptionSession {
   #onStatus;
   #onError;
 
-  constructor({ clientManager, mediaLibrary, mediaFileName = '', model = '', onUpdate, onStatus, onError }) {
+  constructor({ clientManager, mediaLibrary, mediaFileName = '', speechModels = null, onUpdate, onStatus, onError }) {
     this.#clientManager = clientManager;
     this.#mediaLibrary = mediaLibrary;
     this.#mediaFileName = mediaFileName;
-    this.#model = model;
+    this.#speechModels = speechModels;
     this.#onUpdate = onUpdate;
     this.#onStatus = onStatus;
     this.#onError = onError;
@@ -313,13 +313,13 @@ class RollingTranscriptionSession {
     return this.#transcript.trim();
   }
 
-  async start({ track, prompt = '', model = '' }) {
+  async start({ track, prompt = '', speechModels = null }) {
     if (!track) throw new Error('Nenhuma faixa de áudio combinada está disponível para transcrição ao vivo.');
     const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
     if (!AudioContextCtor) throw new Error('Este navegador não oferece suporte à transcrição ao vivo em partes.');
 
     this.#prompt = prompt;
-    this.#model = model;
+    this.#speechModels = speechModels ?? this.#speechModels;
     this.#track = track;
     this.#stream = new MediaStream([track]);
     this.#audioContext = new AudioContextCtor({ latencyHint: 'interactive' });
@@ -412,7 +412,7 @@ class RollingTranscriptionSession {
     const prompt = buildPrompt(this.#prompt, this.#transcript);
 
     this.#onStatus?.({ stage: 'live', message: `Transcrevendo trecho ao vivo ${chunkIndex}…` });
-    const text = await this.#clientManager.transcribeFile({ file, prompt, model: this.#model });
+    const text = await this.#clientManager.transcribeFile({ file, prompt, speechModels: this.#speechModels });
     if (!text) return;
 
     this.#transcript = mergeTranscriptText(this.#transcript, text);
@@ -460,7 +460,7 @@ export class TranscriptionController {
     return clientManager;
   }
 
-  async startLiveTranscription({ track, prompt = '', engine = '', mediaFileName = '', model = '' }) {
+  async startLiveTranscription({ track, prompt = '', engine = '', mediaFileName = '', speechModels = null }) {
     await this.stopLiveTranscription();
     this.#liveTranscript = '';
     const clientManager = this.#resolveClientManager(engine);
@@ -469,7 +469,7 @@ export class TranscriptionController {
       clientManager,
       mediaLibrary: this.#mediaLibrary,
       mediaFileName,
-      model,
+      speechModels,
       onUpdate: payload => {
         this.#liveTranscript = payload.text;
         this.#onLiveUpdate?.(payload);
@@ -478,7 +478,7 @@ export class TranscriptionController {
       onError: error => this.#onError?.(error),
     });
 
-    await session.start({ track, prompt, model });
+    await session.start({ track, prompt, speechModels });
     this.#liveSession = session;
   }
 
@@ -498,9 +498,9 @@ export class TranscriptionController {
     return this.liveTranscript;
   }
 
-  async transcribeFileHandle(fileHandle, { prompt = '', alwaysVersion = false, onProgress, mode = TRANSCRIPTION_OUTPUT_MODES.plain, engine = '', model = '' } = {}) {
+  async transcribeFileHandle(fileHandle, { prompt = '', alwaysVersion = false, onProgress, mode = TRANSCRIPTION_OUTPUT_MODES.plain, engine = '', speechModels = null } = {}) {
     const file = await fileHandle.getFile();
-    const result = await this.transcribeFile(file, { prompt, onProgress, mode, engine, model });
+    const result = await this.transcribeFile(file, { prompt, onProgress, mode, engine, speechModels });
     const savedTranscript = await this.#mediaLibrary.writeTranscript(file.name, result.text, {
       alwaysVersion,
       suffix: TRANSCRIPTION_OUTPUT_MODE_SUFFIXES[mode] || '',
@@ -508,7 +508,7 @@ export class TranscriptionController {
     return { ...result, ...savedTranscript };
   }
 
-  async transcribeFile(file, { prompt = '', onProgress, mode = TRANSCRIPTION_OUTPUT_MODES.plain, engine = '', model = '' } = {}) {
+  async transcribeFile(file, { prompt = '', onProgress, mode = TRANSCRIPTION_OUTPUT_MODES.plain, engine = '', speechModels = null } = {}) {
     if (!(file instanceof File)) throw new Error('Nenhum arquivo foi selecionado para transcrição.');
 
     const clientManager = this.#resolveClientManager(engine);
@@ -526,7 +526,7 @@ export class TranscriptionController {
     if (!structuredMode) {
       if (!needsNormalization) {
         onProgress?.({ stage: 'uploading', message: `Enviando ${file.name} para ${engineLabel}…` });
-        const text = await clientManager.transcribeFile({ file, prompt, model });
+        const text = await clientManager.transcribeFile({ file, prompt, speechModels });
         return { text: text.trim(), mode };
       }
 
@@ -548,7 +548,7 @@ export class TranscriptionController {
           current: index + 1,
           total: chunks.length,
         });
-        const chunkText = await clientManager.transcribeFile({ file: chunk, prompt: chunkPrompt, model });
+        const chunkText = await clientManager.transcribeFile({ file: chunk, prompt: chunkPrompt, speechModels });
         transcript = mergeTranscriptText(transcript, chunkText);
       }
 
@@ -557,7 +557,7 @@ export class TranscriptionController {
 
     if (!needsNormalization) {
       onProgress?.({ stage: 'uploading', message: `Enviando ${file.name} para ${engineLabel}…` });
-      const result = await clientManager.transcribeFileDetailed({ file, prompt, mode, model });
+      const result = await clientManager.transcribeFileDetailed({ file, prompt, mode, speechModels });
       const segments = normalizeStructuredSegments(result.segments);
       const text = segments.length
         ? formatStructuredTranscript(segments, { includeSpeaker: mode === TRANSCRIPTION_OUTPUT_MODES.diarized })
@@ -594,7 +594,7 @@ export class TranscriptionController {
         file: chunk.file,
         prompt: chunkPrompt,
         mode,
-        model,
+        speechModels,
       });
 
       const chunkText = (chunkResult.text || '').trim();

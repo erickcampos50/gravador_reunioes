@@ -1,11 +1,11 @@
 const OPENAI_TRANSCRIPTIONS_ENDPOINT = 'https://api.openai.com/v1/audio/transcriptions';
 const OPENAI_RESPONSES_ENDPOINT = 'https://api.openai.com/v1/responses';
 const ASSEMBLYAI_BASE_URL = 'https://api.assemblyai.com';
-export const ASSEMBLYAI_SPEECH_MODELS = [
-  'universal-3-pro',
-  'universal-2',
-];
-const ASSEMBLYAI_EMPTY_RESULT_RETRY_MODELS = ['universal-2'];
+
+export const ASSEMBLYAI_SPEECH_MODELS = {
+  v2: ['universal-2'],
+  v3: ['universal-3-pro'],
+};
 
 const OPENAI_TRANSCRIPTION_MODELS = [
   'gpt-4o-transcribe',
@@ -16,13 +16,33 @@ const DEFAULT_OPENAI_TRANSCRIPTION_MODEL = OPENAI_TRANSCRIPTION_MODELS[0];
 
 export const TRANSCRIPTION_ENGINES = {
   assemblyai: 'assemblyai',
+  assemblyaiV2: 'assemblyai-v2',
+  assemblyaiV3: 'assemblyai-v3',
   openai: 'openai',
 };
 
 export const TRANSCRIPTION_ENGINE_LABELS = {
-  [TRANSCRIPTION_ENGINES.assemblyai]: 'AssemblyAI',
+  [TRANSCRIPTION_ENGINES.assemblyaiV2]: 'AssemblyAI v2',
+  [TRANSCRIPTION_ENGINES.assemblyaiV3]: 'AssemblyAI v3-Pro',
   [TRANSCRIPTION_ENGINES.openai]: 'OpenAI',
 };
+
+export function getAssemblyAiSpeechModels(engineValue) {
+  if (engineValue === TRANSCRIPTION_ENGINES.assemblyaiV2) {
+    return ASSEMBLYAI_SPEECH_MODELS.v2;
+  }
+  if (engineValue === TRANSCRIPTION_ENGINES.assemblyaiV3) {
+    return ASSEMBLYAI_SPEECH_MODELS.v3;
+  }
+  return [...ASSEMBLYAI_SPEECH_MODELS.v3, ...ASSEMBLYAI_SPEECH_MODELS.v2];
+}
+
+export function getBaseEngine(engineValue) {
+  if (engineValue?.startsWith('assemblyai')) {
+    return TRANSCRIPTION_ENGINES.assemblyai;
+  }
+  return engineValue || TRANSCRIPTION_ENGINES.openai;
+}
 
 export const POSTPROCESS_MODELS = [
   'gpt-5.4-mini',
@@ -592,12 +612,12 @@ export class AssemblyAIClientManager {
     return apiKey;
   }
 
-  async transcribeFile({ file, signal } = {}) {
+  async transcribeFile({ file, signal, speechModels } = {}) {
     if (!(file instanceof File)) {
       throw new Error('Nenhum arquivo de áudio foi enviado para transcrição.');
     }
 
-    const result = await this.#runTranscription({ file, signal, speakerLabels: false });
+    const result = await this.#runTranscription({ file, signal, speakerLabels: false, speechModels });
     const text = extractAssemblyAiTranscriptText(result);
     if (!text) throw createAssemblyAiEmptyTranscriptError(result);
     return text;
@@ -607,6 +627,7 @@ export class AssemblyAIClientManager {
     file,
     signal,
     mode = TRANSCRIPTION_OUTPUT_MODES.diarized,
+    speechModels,
   } = {}) {
     if (!(file instanceof File)) {
       throw new Error('Nenhum arquivo de áudio foi enviado para transcrição.');
@@ -615,7 +636,7 @@ export class AssemblyAIClientManager {
       throw new Error(`Modo de transcrição estruturada inválido para AssemblyAI: ${mode}.`);
     }
 
-    const result = await this.#runTranscription({ file, signal, speakerLabels: true });
+    const result = await this.#runTranscription({ file, signal, speakerLabels: true, speechModels });
     const transcriptText = extractAssemblyAiTranscriptText(result);
     if (!transcriptText) throw createAssemblyAiEmptyTranscriptError(result);
 
@@ -645,29 +666,38 @@ export class AssemblyAIClientManager {
       text: transcriptText,
       raw: result,
       segments,
-      speechModels: [...ASSEMBLYAI_SPEECH_MODELS],
+      speechModels: speechModels || [...ASSEMBLYAI_SPEECH_MODELS.v3, ...ASSEMBLYAI_SPEECH_MODELS.v2],
     };
   }
 
-  async #runTranscription({ file, signal, speakerLabels = false } = {}) {
+  async #runTranscription({ file, signal, speakerLabels = false, speechModels } = {}) {
     const apiKey = this.assertConfigured();
     const { signal: requestSignal, timedOut, cleanup } = createRequestSignal(signal, ASSEMBLYAI_REQUEST_TIMEOUT_MS);
+    const models = speechModels || [...ASSEMBLYAI_SPEECH_MODELS.v3, ...ASSEMBLYAI_SPEECH_MODELS.v2];
 
     try {
       const audioUrl = await this.#uploadFile(file, apiKey, requestSignal);
       const result = await this.#createAndPollTranscript(audioUrl, apiKey, requestSignal, {
         speakerLabels,
-        speechModels: ASSEMBLYAI_SPEECH_MODELS,
+        speechModels: models,
       });
 
+      if (hasAssemblyAiTranscriptContent(result)) {
+        return result;
+      }
+
+      if (speechModels) {
+        throw createAssemblyAiEmptyTranscriptError(result);
+      }
+
       const speechModelUsed = getAssemblyAiSpeechModelUsed(result);
-      if (hasAssemblyAiTranscriptContent(result) || (speechModelUsed && speechModelUsed !== 'universal-3-pro')) {
+      if (speechModelUsed && speechModelUsed !== 'universal-3-pro') {
         return result;
       }
 
       return await this.#createAndPollTranscript(audioUrl, apiKey, requestSignal, {
         speakerLabels,
-        speechModels: ASSEMBLYAI_EMPTY_RESULT_RETRY_MODELS,
+        speechModels: ASSEMBLYAI_SPEECH_MODELS.v2,
       });
     } catch (error) {
       if (timedOut()) {

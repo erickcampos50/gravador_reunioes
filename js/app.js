@@ -25,6 +25,8 @@ import {
   AssemblyAIConfigError,
   ASSEMBLYAI_SPEECH_MODELS,
   DEFAULT_POSTPROCESS_MODEL,
+  getAssemblyAiSpeechModels,
+  getBaseEngine,
   OpenAIClientManager,
   OpenAIConfigError,
   POSTPROCESS_MODELS,
@@ -1859,14 +1861,16 @@ async function transcribeSelectedMedia({ alwaysVersion = false } = {}) {
   if (!selectedMediaEntry) return;
   const mediaName = selectedMediaEntry.name;
   const mediaHandle = selectedMediaEntry.handle;
-  const engine = getSelectedTranscriptionEngine();
-  const engineLabel = getSelectedEngineDisplayLabel(engine);
-  const speechModels = engine === TRANSCRIPTION_ENGINES.assemblyai ? ASSEMBLYAI_SPEECH_MODELS.join(',') : '';
+  const engineValue = getSelectedTranscriptionEngine();
+  const baseEngine = getBaseEngine(engineValue);
+  const engineLabel = getSelectedEngineDisplayLabel(engineValue);
+  const speechModels = baseEngine === TRANSCRIPTION_ENGINES.assemblyai ? getAssemblyAiSpeechModels(engineValue) : null;
+  const speechModelsLabel = speechModels ? speechModels.join(',') : '';
   const mode = getTranscriptionMode();
   const modeLabel = TRANSCRIPTION_OUTPUT_MODE_LABELS[mode] || TRANSCRIPTION_OUTPUT_MODE_LABELS.plain;
 
   try {
-    getTranscriptionClient(engine).assertConfigured();
+    getTranscriptionClient(baseEngine).assertConfigured();
   } catch (error) {
     handleTranscriptionError(error, {
       toast: false,
@@ -1880,8 +1884,8 @@ async function transcribeSelectedMedia({ alwaysVersion = false } = {}) {
   trackEvent('captura_transcription_start', {
     file_name: mediaName,
     force_new_version: alwaysVersion,
-    engine,
-    speech_models: speechModels,
+    engine: baseEngine,
+    speech_models: speechModelsLabel,
     mode,
   });
   transcriptionBusy = true;
@@ -1894,7 +1898,8 @@ async function transcribeSelectedMedia({ alwaysVersion = false } = {}) {
     const result = await transcriptionController.transcribeFileHandle(mediaHandle, {
       prompt: getFileTranscriptionPrompt(),
       alwaysVersion,
-      engine,
+      engine: baseEngine,
+      speechModels,
       mode,
       onProgress: payload => {
         if (payload?.message) {
@@ -1909,8 +1914,8 @@ async function transcribeSelectedMedia({ alwaysVersion = false } = {}) {
     setTranscriptionStatus(`Transcrição salva como ${result.fileName}.`, 'success');
     trackEvent('captura_transcription_saved', {
       file_name: mediaName,
-      engine,
-      speech_models: speechModels,
+      engine: baseEngine,
+      speech_models: speechModelsLabel,
       transcript_name: result.fileName,
       mode,
     });
@@ -1920,7 +1925,7 @@ async function transcribeSelectedMedia({ alwaysVersion = false } = {}) {
       silent: true,
     });
   } catch (error) {
-    trackEvent('captura_transcription_error', { file_name: mediaName, engine, speech_models: speechModels });
+    trackEvent('captura_transcription_error', { file_name: mediaName, engine: baseEngine, speech_models: speechModelsLabel });
     handleTranscriptionError(error, {
       toast: true,
       dialog: false,
@@ -2012,12 +2017,14 @@ async function startLiveTranscriptionForRecording() {
     return;
   }
 
-  const engine = getSelectedTranscriptionEngine();
-  const engineLabel = getSelectedEngineDisplayLabel(engine);
-  const speechModels = engine === TRANSCRIPTION_ENGINES.assemblyai ? ASSEMBLYAI_SPEECH_MODELS.join(',') : '';
+  const engineValue = getSelectedTranscriptionEngine();
+  const baseEngine = getBaseEngine(engineValue);
+  const engineLabel = getSelectedEngineDisplayLabel(engineValue);
+  const speechModels = baseEngine === TRANSCRIPTION_ENGINES.assemblyai ? getAssemblyAiSpeechModels(engineValue) : null;
+  const speechModelsLabel = speechModels ? speechModels.join(',') : '';
 
   try {
-    getTranscriptionClient(engine).assertConfigured();
+    getTranscriptionClient(baseEngine).assertConfigured();
   } catch (error) {
     setLiveTranscriptBadge('Chave necessária', 'badge bg-danger');
     handleTranscriptionError(error, {
@@ -2044,11 +2051,12 @@ async function startLiveTranscriptionForRecording() {
     await transcriptionController.startLiveTranscription({
       track,
       prompt: getLiveTranscriptionPrompt(),
-      engine,
+      engine: baseEngine,
+      speechModels,
       mediaFileName: api.activeFileHandle?.name || '',
     });
     setLiveTranscriptBadge('Ouvindo', 'badge bg-success');
-    trackEvent('captura_live_transcription_start', { engine, speech_models: speechModels });
+    trackEvent('captura_live_transcription_start', { engine: baseEngine, speech_models: speechModelsLabel });
   } catch (error) {
     track.stop();
     setLiveTranscriptBadge('Erro', 'badge bg-danger');
