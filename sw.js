@@ -2,7 +2,7 @@
  * Cache-First strategy with versioned cache and user-controlled update flow.
  */
 
-const CACHE_NAME = 'captura-v2.4.2';
+const CACHE_NAME = 'captura-v2.4.3';
 
 // Local assets that must be available offline.
 // External CDN resources are cached dynamically on first request.
@@ -64,6 +64,11 @@ self.addEventListener('activate', event => {
 // ── Fetch ────────────────────────────────────────────────────────────────────
 // Cache-First: serve from cache when available; fall back to network and
 // cache the fresh response for future offline use.
+//
+// IMPORTANT: API calls (requests carrying an Authorization header) must NEVER
+// be served from cache.  AssemblyAI polls a transcript via repeated GETs to
+// the same URL; caching the first "processing" response would make every
+// subsequent poll return stale data, hanging the transcription forever.
 self.addEventListener('fetch', event => {
   if (event.request.method !== 'GET') return;
 
@@ -72,6 +77,11 @@ self.addEventListener('fetch', event => {
     event.respondWith(fetch(new Request(event.request, { cache: 'no-store' })));
     return;
   }
+
+  // Never cache API calls — identified by the presence of an authorization
+  // header.  This protects AssemblyAI polling GETs and any future API that
+  // uses GET with authentication from being served stale responses.
+  if (event.request.headers.has('authorization')) return;
 
   event.respondWith(
     caches.match(event.request).then(cached => {
