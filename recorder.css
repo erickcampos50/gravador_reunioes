@@ -1442,7 +1442,11 @@ body.captura-auth-locked {
 }
 
 .captura-library-detail-actions .captura-engine-actions {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
+}
+
+#transcribe-new-version-btn {
+  display: none;
 }
 
 .captura-engine-button,
@@ -1475,6 +1479,11 @@ body.captura-auth-locked {
 .captura-inline-status {
   min-height: 1.25rem;
   color: var(--captura-text-muted);
+}
+
+#transcription-mode-hint,
+#selected-transcript-status {
+  display: none;
 }
 
 .capturatranscript-textarea,

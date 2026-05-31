@@ -159,7 +159,6 @@ const mediaPreviewPlaceholderEl = document.getElementById('media-preview-placeho
 const transcribeSelectedBtn  = document.getElementById('transcribe-selected-btn');
 const transcribeNewVersionBtn = document.getElementById('transcribe-new-version-btn');
 const transcriptVersionSel   = document.getElementById('transcript-version-select');
-const transcriptVersionLabel = transcriptVersionSel?.closest('label');
 const selectedTranscriptStatusEl = document.getElementById('selected-transcript-status');
 const transcriptViewerEl     = document.getElementById('transcript-viewer');
 const processSelectedTranscriptBtn = document.getElementById('process-selected-transcript-btn');
@@ -486,12 +485,12 @@ function updateTranscriptionUiCapabilities() {
     savePref(PREFS.transcriptionMode, transcriptionModeSel.value);
   }
 
+  const promptLabel = transcriptionPromptEl.closest('label.captura-field');
+  if (promptLabel) promptLabel.hidden = !isOpenAi;
+
   transcriptionPromptEl.placeholder = supportsPrompt
     ? 'Ex.: Preserve termos técnicos, siglas, nomes próprios e contexto específico desta mídia durante a transcrição.'
     : 'Disponível quando o motor OpenAI estiver selecionado.';
-
-  if (transcriptVersionLabel) transcriptVersionLabel.hidden = !isOpenAi;
-  if (transcribeNewVersionBtn) transcribeNewVersionBtn.hidden = true;
 }
 
 function updateTranscriptionModeHint() {
