@@ -584,17 +584,37 @@
           <p class="captura-side-note mb-2">
             Inspirado no <a href="https://mathewsachin.github.io/" target="_blank" rel="noopener noreferrer">Captura Web Recorder</a> de Mathew Sachin e no NamoradaGPT.
           </p>
-          <p class="captura-side-note mb-3">
-            O modo <strong>normal</strong> entrega apenas o texto corrido. O modo <strong>segmentado</strong> organiza a fala por trechos com <strong>timestamp</strong>, e o modo <strong>diarizado</strong> separa os trechos por <strong>speaker</strong> quando a resposta estruturada estiver disponível.
+          <p class="captura-side-note mb-2">
+            Use a transcrição como um rascunho auditável, não como ata definitiva. Sempre que o conteúdo for sensível, compare trechos importantes com o áudio ou vídeo original antes de compartilhar, resumir ou arquivar.
           </p>
-          <ul class="captura-footer-list mb-3">
+          <p class="captura-side-note mb-2">
+            O modo <strong>normal</strong> entrega texto corrido. O modo <strong>segmentado</strong> organiza falas por trechos com <strong>timestamp</strong>. O modo <strong>diarizado</strong> tenta separar falas por <strong>speaker</strong> quando o motor selecionado consegue retornar essa estrutura.
+          </p>
+          <ul class="captura-footer-list mb-2">
             <li><strong>Normal:</strong> útil para leitura rápida e pós-processamento simples.</li>
             <li><strong>Segmentado:</strong> melhor para revisar o que foi dito em cada faixa de tempo.</li>
-            <li><strong>Diarizado:</strong> melhor para reuniões com vários participantes identificáveis.</li>
+            <li><strong>Diarizado:</strong> melhor para reuniões com vários participantes, mas os rótulos de speaker não são identidade confirmada.</li>
+            <li><strong>Transcrição ao vivo:</strong> serve para acompanhamento durante a gravação; a transcrição final do arquivo tende a ser a referência mais estável.</li>
           </ul>
-          <p class="captura-side-note mb-0">
-            Vale avaliar o resultado final de cada modo antes de compartilhar, resumir ou salvar a versão definitiva.
+          <p class="captura-side-note mb-2">
+            Ao interpretar o resultado, trate nomes próprios, siglas, números, valores, datas, termos técnicos e decisões como pontos que merecem revisão. Timestamps podem variar alguns segundos, e a diarização pode trocar participantes quando há sobreposição de vozes, ruído, música, eco ou microfone distante.
           </p>
+          <ul class="captura-footer-list mb-2">
+            <li><strong>Prompt de transcrição:</strong> use para informar contexto, nomes, siglas e vocabulário esperado antes de transcrever com OpenAI.</li>
+            <li><strong>Notas da reunião:</strong> registre decisões e contexto durante a gravação; elas podem ser incluídas no pós-processamento, mas continuam separadas da fala transcrita.</li>
+            <li><strong>Pós-processamento:</strong> transforma a transcrição em ata, resumo ou linguagem específica. Ele melhora a leitura, mas pode condensar, reorganizar ou omitir nuances.</li>
+            <li><strong>Versões:</strong> gere uma nova versão quando mudar motor, modo, prompt ou objetivo de revisão, preservando a transcrição anterior para comparação.</li>
+          </ul>
+          <p class="captura-side-note mb-2">
+            Se algo der errado, comece verificando se há áudio audível no player do arquivo selecionado, se a chave do motor escolhido está preenchida, se a pasta ainda tem permissão de leitura e escrita, e se a conexão está estável. Em arquivos muito longos, aguarde a preparação local terminar antes de tentar novamente.
+          </p>
+          <ul class="captura-footer-list mb-0">
+            <li><strong>Resultado vazio:</strong> confirme que o arquivo tem fala clara; silêncio, música ou áudio muito baixo podem gerar pouca ou nenhuma transcrição.</li>
+            <li><strong>Timeout ou processamento travado:</strong> tente novamente, reduza o arquivo, use MP3 quando só precisar do áudio, ou troque de motor de transcrição.</li>
+            <li><strong>Erro de chave/API:</strong> revise a chave informada, o motor selecionado, créditos/limites da conta e eventuais bloqueios de rede.</li>
+            <li><strong>Arquivo grande:</strong> a aplicação pode comprimir e dividir localmente; isso consome CPU e memória, então evite fechar a aba durante a preparação.</li>
+            <li><strong>Texto estranho ou speakers trocados:</strong> compare com o modo segmentado, ajuste o prompt com contexto e gere uma nova versão antes de usar como registro final.</li>
+          </ul>
         </div>
       </details>
     </footer>
