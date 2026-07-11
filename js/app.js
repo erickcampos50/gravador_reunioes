@@ -2835,8 +2835,8 @@ async function enumerateDevices() {
 // ── Preferences ────────────────────────────────────────────────────────────────
 
 function restoreDetailsPref(detailsEl, prefKey) {
-  const pref = loadPref(prefKey);
-  if (pref !== null) detailsEl.open = pref === 'true';
+  void prefKey;
+  detailsEl.open = false;
 }
 
 function restoreSimplePrefs() {
