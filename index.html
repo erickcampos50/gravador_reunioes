@@ -303,7 +303,7 @@
             <div>
               <p class="captura-panel-kicker mb-1">Motores</p>
               <h2 class="captura-section-title mb-1">Chaves de API</h2>
-              <p class="captura-side-subtitle mb-0">Deixe aqui apenas as credenciais dos motores de transcrição.</p>
+              <p class="captura-side-subtitle mb-0">Deixe aqui apenas as credenciais dos motores de transcrição e pós-processamento.</p>
             </div>
           </div>
 
@@ -344,10 +344,32 @@
                     placeholder="assemblyai-..."
                     spellcheck="false"
                   >
-                  <button id="assemblyai-api-key-toggle" type="button" class="btn btn-outline-secondary">Mostrar</button>
+                  <button id="assemblyai-api-key-toggle"  type="button" class="btn btn-outline-secondary">Mostrar</button>
                 </div>
                 <p class="captura-side-note mb-0 mt-2">
                   A chave também fica apenas na sessão atual e pode ser lembrada pelo gerenciador de senhas do navegador.
+                </p>
+              </form>
+            </details>
+
+            <details id="deepseek-panel" class="captura-details">
+              <summary>Chave da API da DeepSeek</summary>
+              <form id="deepseek-key-form" class="mt-3" autocomplete="on">
+                <input type="text" name="username" value="Gravador de Reuniões DeepSeek" autocomplete="username" hidden>
+                <div class="input-group input-group-sm">
+                  <input
+                    id="deepseek-api-key"
+                    name="password"
+                    type="password"
+                    class="form-control"
+                    autocomplete="current-password"
+                    placeholder="sk-..."
+                    spellcheck="false"
+                  >
+                  <button id="deepseek-api-key-toggle" type="button" class="btn btn-outline-secondary">Mostrar</button>
+                </div>
+                <p class="captura-side-note mb-0 mt-2">
+                  Use esta chave quando escolher deepseek-v4-flash no pós-processamento.
                 </p>
               </form>
             </details>
@@ -470,7 +492,12 @@
             </label>
 
             <label class="captura-field" for="transcript-viewer">
-              <span class="captura-field-label">Transcrição</span>
+              <span class="captura-field-label captura-transcript-label">
+                <span>Transcrição</span>
+                <button id="transcript-edit-btn" type="button" class="captura-transcript-edit-btn" disabled>
+                  Editar
+                </button>
+              </span>
               <textarea
                 id="transcript-viewer"
                 class="form-control form-control-sm capturatranscript-textarea"
@@ -500,8 +527,12 @@
                       <span>gpt-5.4-mini</span>
                     </label>
                     <label class="captura-inline-radio-option" for="postprocess-model-full">
-                      <input type="radio" id="postprocess-model-full" name="postprocess-model" value="gpt-5.4">
-                      <span>gpt-5.4</span>
+                      <input type="radio" id="postprocess-model-full" name="postprocess-model" value="gpt-5.6-luna">
+                      <span>gpt-5.6-luna</span>
+                    </label>
+                    <label class="captura-inline-radio-option" for="postprocess-model-deepseek">
+                      <input type="radio" id="postprocess-model-deepseek" name="postprocess-model" value="deepseek-v4-flash">
+                      <span>deepseek-v4-flash</span>
                     </label>
                   </fieldset>
 

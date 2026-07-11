@@ -25,8 +25,11 @@ import {
   AssemblyAIConfigError,
   ASSEMBLYAI_SPEECH_MODELS,
   DEFAULT_POSTPROCESS_MODEL,
+  DeepSeekClientManager,
+  DeepSeekConfigError,
   getAssemblyAiSpeechModels,
   getBaseEngine,
+  isDeepSeekPostProcessModel,
   OpenAIClientManager,
   OpenAIConfigError,
   POSTPROCESS_MODELS,
@@ -123,12 +126,16 @@ const errorDialog    = document.getElementById('captura-error-dialog');
 
 const openAiPanel            = document.getElementById('openai-panel');
 const assemblyAiPanel        = document.getElementById('assemblyai-panel');
+const deepSeekPanel          = document.getElementById('deepseek-panel');
 const openAiKeyForm          = document.getElementById('openai-key-form');
 const openAiApiKeyInput      = document.getElementById('openai-api-key');
 const openAiApiKeyToggleBtn  = document.getElementById('openai-api-key-toggle');
 const assemblyAiKeyForm      = document.getElementById('assemblyai-key-form');
 const assemblyAiApiKeyInput  = document.getElementById('assemblyai-api-key');
 const assemblyAiApiKeyToggleBtn = document.getElementById('assemblyai-api-key-toggle');
+const deepSeekKeyForm        = document.getElementById('deepseek-key-form');
+const deepSeekApiKeyInput    = document.getElementById('deepseek-api-key');
+const deepSeekApiKeyToggleBtn = document.getElementById('deepseek-api-key-toggle');
 const liveTranscriptionChk   = document.getElementById('live-transcription-chk');
 const transcriptionPromptEl  = document.getElementById('transcription-prompt');
 const transcriptionModeSel   = document.getElementById('transcription-mode-select');
@@ -164,6 +171,7 @@ const transcribeNewVersionBtn = document.getElementById('transcribe-new-version-
 const transcriptVersionSel   = document.getElementById('transcript-version-select');
 const selectedTranscriptStatusEl = document.getElementById('selected-transcript-status');
 const transcriptViewerEl     = document.getElementById('transcript-viewer');
+const transcriptEditBtn      = document.getElementById('transcript-edit-btn');
 const processSelectedTranscriptBtn = document.getElementById('process-selected-transcript-btn');
 const postProcessStatusEl    = document.getElementById('postprocess-status');
 const postProcessPresetSel   = document.getElementById('postprocess-preset-select');
@@ -191,6 +199,7 @@ const storage        = new StorageManager(dirNameEl, showErrorDialog);
 const recorderCore   = new RecorderCore();
 const openAiClient   = new OpenAIClientManager(openAiApiKeyInput);
 const assemblyAiClient = new AssemblyAIClientManager(assemblyAiApiKeyInput);
+const deepSeekClient = new DeepSeekClientManager(deepSeekApiKeyInput);
 const mediaLibrary   = new MediaLibrary(storage);
 const transcriptionClients = {
   [TRANSCRIPTION_ENGINES.openai]: openAiClient,
@@ -295,9 +304,16 @@ async function fallbackPostProcessText({ text, prompt = '', signal, model = DEFA
   return outputText;
 }
 
-const postProcessText = typeof openAiClient.postProcessText === 'function'
-  ? params => openAiClient.postProcessText(params)
-  : params => fallbackPostProcessText(params);
+function getPostProcessClient(model = DEFAULT_POSTPROCESS_MODEL) {
+  return isDeepSeekPostProcessModel(model) ? deepSeekClient : openAiClient;
+}
+
+const postProcessText = params => {
+  const client = getPostProcessClient(params?.model);
+  return typeof client?.postProcessText === 'function'
+    ? client.postProcessText(params)
+    : fallbackPostProcessText(params);
+};
 
 // ── API + state machine ────────────────────────────────────────────────────────
 
@@ -336,6 +352,9 @@ let meetingNotesSavePromise     = Promise.resolve();
 let meetingNotesPrefixEnabled   = false;
 const meetingNotesPostProcessByMedia = new Map();
 let selectedMediaNotesLoading   = false;
+let transcriptEditingEnabled    = false;
+let transcriptEditSaveQueue     = Promise.resolve();
+let transcriptEditSaveSequence  = 0;
 let authLoadPromise             = null;
 let authRecords                 = [];
 let authFingerprint            = '';
@@ -417,6 +436,11 @@ function openOpenAiPanel() {
 function openAssemblyAiPanel() {
   assemblyAiPanel.open = true;
   savePref(PREFS.assemblyAiPanelOpen, 'true');
+}
+
+function openDeepSeekPanel() {
+  deepSeekPanel.open = true;
+  savePref(PREFS.deepSeekPanelOpen, 'true');
 }
 
 function getSelectedTranscriptionEngine() {
@@ -1086,6 +1110,111 @@ function clearTranscriptViewer(message = 'A transcrição selecionada será exib
   transcriptViewerEl.placeholder = message;
 }
 
+function getSelectedTranscriptEntry() {
+  const transcriptName = transcriptVersionSel.value;
+  return selectedTranscriptEntries.find(entry => entry.name === transcriptName) || null;
+}
+
+function clearPostProcessCacheForTranscript(mediaName = selectedMediaEntry?.name || '', transcriptName = transcriptVersionSel.value) {
+  if (!mediaName || !transcriptName) return;
+  const keyPrefix = `${mediaName}::${transcriptName}::`;
+  Array.from(postProcessResultsByTranscript.keys()).forEach(key => {
+    if (key.startsWith(keyPrefix)) postProcessResultsByTranscript.delete(key);
+  });
+}
+
+function updateTranscriptEditUi({ lockControls = false } = {}) {
+  const canEdit = !!getSelectedTranscriptEntry() && !lockControls;
+  transcriptEditBtn.disabled = !canEdit;
+  transcriptEditBtn.textContent = transcriptEditingEnabled ? 'Concluir' : 'Editar';
+  transcriptEditBtn.setAttribute('aria-pressed', String(transcriptEditingEnabled));
+  transcriptEditBtn.title = transcriptEditingEnabled
+    ? 'Concluir a edição direta da transcrição.'
+    : 'Editar diretamente o arquivo .txt da transcrição selecionada.';
+  transcriptViewerEl.readOnly = !transcriptEditingEnabled || lockControls;
+  transcriptViewerEl.classList.toggle('is-editing', transcriptEditingEnabled && !lockControls);
+}
+
+function stopTranscriptEditing({ renderViewer = true } = {}) {
+  if (!transcriptEditingEnabled) {
+    updateTranscriptEditUi();
+    return;
+  }
+
+  transcriptEditSaveSequence += 1;
+  transcriptEditingEnabled = false;
+  transcriptViewerEl.readOnly = true;
+  transcriptViewerEl.classList.remove('is-editing');
+  if (renderViewer) renderSelectedTranscriptViewer();
+  updateTranscriptEditUi();
+}
+
+async function startTranscriptEditing() {
+  const transcriptEntry = getSelectedTranscriptEntry();
+  if (!transcriptEntry) return;
+
+  const dirOk = await storage.ensureAccess({
+    mode: 'readwrite',
+    silent: false,
+    requestIfNeeded: true,
+  });
+  if (!dirOk) {
+    throw new Error('A pasta escolhida não está disponível para editar a transcrição.');
+  }
+
+  transcriptEditingEnabled = true;
+  transcriptViewerEl.value = selectedTranscriptRawText;
+  transcriptViewerEl.placeholder = 'Edite a transcrição. Cada alteração será salva no arquivo selecionado.';
+  updateTranscriptEditUi();
+  setSelectedTranscriptStatus(`Editando ${transcriptEntry.name}. Cada alteração será salva no arquivo.`, 'muted');
+  transcriptViewerEl.focus();
+  transcriptViewerEl.setSelectionRange(transcriptViewerEl.value.length, transcriptViewerEl.value.length);
+}
+
+async function toggleTranscriptEditing() {
+  if (transcriptEditingEnabled) {
+    stopTranscriptEditing();
+    return;
+  }
+
+  await startTranscriptEditing();
+}
+
+function queueTranscriptEditSave() {
+  if (!transcriptEditingEnabled) return;
+  const transcriptEntry = getSelectedTranscriptEntry();
+  if (!transcriptEntry) return;
+
+  const fileName = transcriptEntry.name;
+  const nextText = transcriptViewerEl.value;
+  const saveSequence = ++transcriptEditSaveSequence;
+  selectedTranscriptRawText = nextText;
+  clearPostProcessCacheForTranscript();
+  syncPostProcessOutput();
+  setSelectedTranscriptStatus(`Salvando edição em ${fileName}…`, 'muted');
+
+  transcriptEditSaveQueue = transcriptEditSaveQueue
+    .catch(() => {})
+    .then(async () => {
+      const result = await mediaLibrary.writeTranscriptFile(fileName, nextText);
+      transcriptEntry.handle = result.handle;
+      if (saveSequence === transcriptEditSaveSequence) {
+        setSelectedTranscriptStatus(`Edição salva em ${fileName}.`, 'success');
+      }
+    })
+    .catch(error => {
+      if (saveSequence === transcriptEditSaveSequence) {
+        stopTranscriptEditing({ renderViewer: false });
+        handleTranscriptionError(error, {
+          toast: true,
+          dialog: false,
+          updateTranscriptPane: true,
+          updateLivePane: false,
+        });
+      }
+    });
+}
+
 function formatMeetingTimePrefix(seconds) {
   return `[${fmtTime(Math.max(0, Math.floor(Number(seconds) || 0)))}]`;
 }
@@ -1292,6 +1421,7 @@ function syncPostProcessOutput() {
 }
 
 function clearSelectedMediaState(message = 'Selecione um arquivo da pasta escolhida para visualizar e inspecionar a transcrição e a informação complementar.') {
+  stopTranscriptEditing({ renderViewer: false });
   selectedMediaEntry = null;
   selectedTranscriptEntries = [];
   selectedTranscriptRawText = '';
@@ -1302,6 +1432,7 @@ function clearSelectedMediaState(message = 'Selecione um arquivo da pasta escolh
   transcriptVersionSel.innerHTML = '<option value="">Nenhuma transcrição ainda</option>';
   transcriptVersionSel.disabled = true;
   clearTranscriptViewer();
+  updateTranscriptEditUi();
   setSelectedTranscriptStatus('Selecione um arquivo para carregar a transcrição.', 'muted');
   postProcessOutputEl.value = '';
   updatePostProcessActionButtons();
@@ -1623,7 +1754,7 @@ async function saveMeetingNotesToDisk() {
     const libraryEntry = libraryEntries.find(item => item.name === meetingNotesSessionFileName);
     if (libraryEntry) {
       libraryEntry.notesCount = notesToPersist.length;
-      libraryEntry.notesFileName = notesToPersist.length ? `${meetingNotesSessionFileName.replace(/\.[^.]+$/, '')}-notes.json` : '';
+      libraryEntry.notesFileName = notesToPersist.length ? result?.fileName || '' : '';
     }
     renderMediaFileList();
 
@@ -1873,6 +2004,7 @@ function handleTranscriptionError(error, {
   if (dialog) showErrorDialog(title, message, error);
   if (error instanceof OpenAIConfigError) openOpenAiPanel();
   if (error instanceof AssemblyAIConfigError) openAssemblyAiPanel();
+  if (error instanceof DeepSeekConfigError) openDeepSeekPanel();
 }
 
 async function loadMediaPreview(mediaEntry) {
@@ -1897,14 +2029,22 @@ async function loadSelectedMediaNotes(mediaFileName) {
 }
 
 function renderSelectedTranscriptViewer() {
+  if (transcriptEditingEnabled) {
+    transcriptViewerEl.value = selectedTranscriptRawText;
+    transcriptViewerEl.placeholder = 'Edite a transcrição. Cada alteração será salva no arquivo selecionado.';
+    return;
+  }
+
   const combinedText = buildTranscriptViewerText(selectedTranscriptRawText, selectedMediaNotesInfo);
   if (!combinedText) {
     clearTranscriptViewer('Este arquivo ainda não possui uma transcrição salva.');
+    updateTranscriptEditUi();
     return;
   }
 
   transcriptViewerEl.value = combinedText;
   transcriptViewerEl.placeholder = 'A transcrição selecionada será exibida aqui.';
+  updateTranscriptEditUi();
 }
 
 async function loadTranscriptEntries(mediaFileName, preferredTranscriptName = '') {
@@ -1939,8 +2079,8 @@ async function loadTranscriptEntries(mediaFileName, preferredTranscriptName = ''
 }
 
 async function loadSelectedTranscript() {
-  const transcriptName = transcriptVersionSel.value;
-  const transcriptEntry = selectedTranscriptEntries.find(entry => entry.name === transcriptName);
+  stopTranscriptEditing({ renderViewer: false });
+  const transcriptEntry = getSelectedTranscriptEntry();
 
   if (!transcriptEntry) {
     selectedTranscriptRawText = '';
@@ -1971,6 +2111,7 @@ async function loadSelectedTranscript() {
 }
 
 async function selectMediaEntryByName(mediaName, preferredTranscriptName = '') {
+  stopTranscriptEditing({ renderViewer: false });
   const entry = libraryEntries.find(item => item.name === mediaName);
   if (!entry) return;
 
@@ -2123,8 +2264,11 @@ async function processSelectedTranscript() {
   const transcriptText = buildTranscriptProcessingText();
   if (!selectedMediaEntry || !transcriptVersionSel.value || !transcriptText.trim()) return;
 
+  const postProcessModel = getSelectedPostProcessModel();
+  const postProcessClient = getPostProcessClient(postProcessModel);
+
   try {
-    openAiClient.assertConfigured();
+    postProcessClient.assertConfigured();
   } catch (error) {
     setPostProcessStatus(error.message, 'danger');
     handleTranscriptionError(error, {
@@ -2138,7 +2282,6 @@ async function processSelectedTranscript() {
 
   const transcriptName = transcriptVersionSel.value;
   const cacheKey = getSelectedTranscriptCacheKey();
-  const postProcessModel = getSelectedPostProcessModel();
   const notesIncluded = getMeetingNotesPostProcessEnabled(selectedMediaEntry.name) && hasMeetingNotes();
   const notesSuffix = notesIncluded ? ' com notas da reunião' : '';
 
@@ -2415,6 +2558,8 @@ function render(state) {
   openAiApiKeyToggleBtn.disabled = lockControls;
   assemblyAiApiKeyInput.disabled = lockControls;
   assemblyAiApiKeyToggleBtn.disabled = lockControls;
+  deepSeekApiKeyInput.disabled = lockControls;
+  deepSeekApiKeyToggleBtn.disabled = lockControls;
   refreshLibraryBtn.disabled = lockControls || !storage.dirHandle;
   transcribeSelectedBtn.disabled = lockControls || !selectedMediaEntry;
   transcribeNewVersionBtn.disabled = lockControls || !selectedMediaEntry;
@@ -2424,6 +2569,7 @@ function render(state) {
   postProcessPresetSel.disabled = lockControls;
   transcriptionEngineInputs.forEach(input => { input.disabled = lockControls; });
   postProcessModelInputs.forEach(input => { input.disabled = lockControls; });
+  updateTranscriptEditUi({ lockControls });
   if (meetingNotesAddBtn) meetingNotesAddBtn.disabled = !notesCanEdit;
   updatePostProcessActionButtons({ lockControls });
   renderMeetingNotesPanel();
@@ -2760,6 +2906,7 @@ function restoreSimplePrefs() {
 
   restoreDetailsPref(openAiPanel, PREFS.openAiPanelOpen);
   restoreDetailsPref(assemblyAiPanel, PREFS.assemblyAiPanelOpen);
+  restoreDetailsPref(deepSeekPanel, PREFS.deepSeekPanelOpen);
   updateTranscriptionUiCapabilities();
   updateTranscriptionModeHint();
 }
@@ -2870,6 +3017,21 @@ transcriptVersionSel.addEventListener('change', () => {
   void loadSelectedTranscript();
 });
 
+transcriptEditBtn.addEventListener('click', () => {
+  toggleTranscriptEditing().catch(error => {
+    handleTranscriptionError(error, {
+      toast: true,
+      dialog: false,
+      updateTranscriptPane: true,
+      updateLivePane: false,
+    });
+  });
+});
+
+transcriptViewerEl.addEventListener('input', () => {
+  queueTranscriptEditSave();
+});
+
 processSelectedTranscriptBtn.addEventListener('click', () => {
   void processSelectedTranscript();
 });
@@ -2880,6 +3042,7 @@ postProcessPresetSel.addEventListener('change', () => {
 
 openAiKeyForm?.addEventListener('submit', event => event.preventDefault());
 assemblyAiKeyForm?.addEventListener('submit', event => event.preventDefault());
+deepSeekKeyForm?.addEventListener('submit', event => event.preventDefault());
 
 openAiApiKeyToggleBtn.addEventListener('click', () => {
   const reveal = openAiApiKeyInput.type === 'password';
@@ -2893,12 +3056,22 @@ assemblyAiApiKeyToggleBtn.addEventListener('click', () => {
   assemblyAiApiKeyToggleBtn.textContent = reveal ? 'Ocultar' : 'Mostrar';
 });
 
+deepSeekApiKeyToggleBtn.addEventListener('click', () => {
+  const reveal = deepSeekApiKeyInput.type === 'password';
+  deepSeekApiKeyInput.type = reveal ? 'text' : 'password';
+  deepSeekApiKeyToggleBtn.textContent = reveal ? 'Ocultar' : 'Mostrar';
+});
+
 openAiPanel.addEventListener('toggle', () => {
   savePref(PREFS.openAiPanelOpen, String(openAiPanel.open));
 });
 
 assemblyAiPanel.addEventListener('toggle', () => {
   savePref(PREFS.assemblyAiPanelOpen, String(assemblyAiPanel.open));
+});
+
+deepSeekPanel.addEventListener('toggle', () => {
+  savePref(PREFS.deepSeekPanelOpen, String(deepSeekPanel.open));
 });
 
 liveTranscriptionChk.addEventListener('change', () => {

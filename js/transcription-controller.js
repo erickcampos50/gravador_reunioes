@@ -408,7 +408,7 @@ class RollingTranscriptionSession {
   }
 
   async #processChunk(blob, chunkIndex) {
-    const file = blobToFile(blob, `live-transcript-${chunkIndex}.wav`, 'audio/wav');
+    const file = blobToFile(blob, `transcricao-ao-vivo-trecho-${chunkIndex}.wav`, 'audio/wav');
     const prompt = buildPrompt(this.#prompt, this.#transcript);
 
     this.#onStatus?.({ stage: 'live', message: `Transcrevendo trecho ao vivo ${chunkIndex}…` });
@@ -618,8 +618,8 @@ export class TranscriptionController {
 
   async #createUploadChunks(file, onProgress, { includeOffsets = false } = {}) {
     const ffmpeg = await getFfmpeg(onProgress);
-    const inputName = `input.${getExtension(file.name) || 'bin'}`;
-    const normalizedName = 'normalized.mp3';
+    const inputName = `entrada.${getExtension(file.name) || 'bin'}`;
+    const normalizedName = 'normalizado.mp3';
 
     try {
       await ffmpeg.writeFile(inputName, await fetchFile(file));
@@ -642,7 +642,7 @@ export class TranscriptionController {
       const normalizedData = await ffmpeg.readFile(normalizedName);
       const normalizedFile = blobToFile(
         new Blob([normalizedData], { type: 'audio/mpeg' }),
-        `${file.name.replace(/\.[^.]+$/, '')}-normalized.mp3`,
+        `${file.name.replace(/\.[^.]+$/, '')}-normalizado.mp3`,
         'audio/mpeg'
       );
 
@@ -663,7 +663,7 @@ export class TranscriptionController {
 
       for (let start = 0; start < duration; start += stepSeconds) {
         chunkIndex += 1;
-        const outputName = `chunk-${chunkIndex}.mp3`;
+        const outputName = `parte-${chunkIndex}.mp3`;
         const chunkDuration = Math.min(FILE_CHUNK_SECONDS, Math.max(1, duration - start));
 
         onProgress?.({
@@ -683,7 +683,7 @@ export class TranscriptionController {
         ]);
 
         const chunkData = await ffmpeg.readFile(outputName);
-        const chunkFile = blobToFile(new Blob([chunkData], { type: 'audio/mpeg' }), `${file.name.replace(/\.[^.]+$/, '')}-part-${chunkIndex}.mp3`, 'audio/mpeg');
+        const chunkFile = blobToFile(new Blob([chunkData], { type: 'audio/mpeg' }), `${file.name.replace(/\.[^.]+$/, '')}-parte-${chunkIndex}.mp3`, 'audio/mpeg');
         chunks.push(includeOffsets ? { file: chunkFile, startSeconds: start } : chunkFile);
         await ffmpeg.deleteFile(outputName).catch(() => {});
         await new Promise(r => setTimeout(r, 0));

@@ -1,6 +1,7 @@
 const OPENAI_TRANSCRIPTIONS_ENDPOINT = 'https://api.openai.com/v1/audio/transcriptions';
 const OPENAI_RESPONSES_ENDPOINT = 'https://api.openai.com/v1/responses';
 const ASSEMBLYAI_BASE_URL = 'https://api.assemblyai.com';
+const DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT = 'https://api.deepseek.com/chat/completions';
 
 export const ASSEMBLYAI_SPEECH_MODELS = {
   v2: ['universal-2'],
@@ -44,9 +45,18 @@ export function getBaseEngine(engineValue) {
   return engineValue || TRANSCRIPTION_ENGINES.openai;
 }
 
-export const POSTPROCESS_MODELS = [
+export const OPENAI_POSTPROCESS_MODELS = [
   'gpt-5.4-mini',
-  'gpt-5.4',
+  'gpt-5.6-luna',
+];
+
+export const DEEPSEEK_POSTPROCESS_MODELS = [
+  'deepseek-v4-flash',
+];
+
+export const POSTPROCESS_MODELS = [
+  ...OPENAI_POSTPROCESS_MODELS,
+  ...DEEPSEEK_POSTPROCESS_MODELS,
 ];
 
 export const DEFAULT_POSTPROCESS_MODEL = POSTPROCESS_MODELS[0];
@@ -115,6 +125,20 @@ export class AssemblyAIConfigError extends TranscriptionConfigError {
   }
 }
 
+export class DeepSeekConfigError extends TranscriptionConfigError {
+  constructor(message) {
+    super(message, {
+      name: 'DeepSeekConfigError',
+      title: 'Chave da API da DeepSeek obrigatória',
+      engine: 'deepseek',
+    });
+  }
+}
+
+export function isDeepSeekPostProcessModel(model) {
+  return DEEPSEEK_POSTPROCESS_MODELS.includes(model);
+}
+
 function createRequestSignal(signal, timeoutMs) {
   const controller = new AbortController();
   let timeoutId = null;
@@ -176,6 +200,24 @@ function extractResponseText(data) {
   return parts.join('\n\n').trim();
 }
 
+function extractChatCompletionText(data) {
+  if (!Array.isArray(data?.choices)) return '';
+
+  return data.choices
+    .map(choice => {
+      const content = choice?.message?.content;
+      if (typeof content === 'string') return content.trim();
+      if (!Array.isArray(content)) return '';
+      return content
+        .map(item => (typeof item?.text === 'string' ? item.text.trim() : ''))
+        .filter(Boolean)
+        .join('\n');
+    })
+    .filter(Boolean)
+    .join('\n\n')
+    .trim();
+}
+
 function normalizeTranscriptionSegments(data) {
   if (!Array.isArray(data?.segments)) return [];
 
@@ -215,6 +257,21 @@ async function parseOpenAiErrorMessage(response) {
   const text = await response.text().catch(() => '');
   const message = text || `A requisição para a OpenAI falhou com status ${response.status}.`;
   return requestId ? `${message} (request id: ${requestId})` : message;
+}
+
+async function parseDeepSeekErrorMessage(response) {
+  const contentType = response.headers.get('content-type') || '';
+  if (contentType.includes('application/json')) {
+    try {
+      const data = await response.json();
+      return data?.error?.message || data?.message || `A requisição para a DeepSeek falhou com status ${response.status}.`;
+    } catch (_) {
+      // Ignore JSON parse failures and fall back to a generic message.
+    }
+  }
+
+  const text = await response.text().catch(() => '');
+  return text || `A requisição para a DeepSeek falhou com status ${response.status}.`;
 }
 
 async function readOpenAiErrorResponse(response, model) {
@@ -578,6 +635,84 @@ export class OpenAIClientManager {
     const outputText = extractResponseText(data);
     if (!outputText) {
       throw new Error('A OpenAI retornou um resultado vazio no pós-processamento.');
+    }
+
+    return outputText;
+  }
+}
+
+export class DeepSeekClientManager {
+  #apiKeyInput;
+
+  supportsPostProcess = true;
+
+  constructor(apiKeyInput) {
+    this.#apiKeyInput = apiKeyInput;
+  }
+
+  getApiKey() {
+    return this.#apiKeyInput?.value.trim() || '';
+  }
+
+  assertConfigured() {
+    const apiKey = this.getApiKey();
+    if (!apiKey) {
+      throw new DeepSeekConfigError('Preencha sua chave da API da DeepSeek antes de usar o pós-processamento com deepseek-v4-flash.');
+    }
+    return apiKey;
+  }
+
+  async postProcessText({ text, prompt = '', signal, model = DEEPSEEK_POSTPROCESS_MODELS[0] } = {}) {
+    const apiKey = this.assertConfigured();
+    const transcriptText = text?.trim() || '';
+    if (!transcriptText) {
+      throw new Error('Não há texto de transcrição disponível para pós-processamento.');
+    }
+
+    let response;
+    try {
+      response = await fetch(DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            {
+              role: 'system',
+              content: 'Você reescreve transcrições. Retorne apenas o texto final reformulado, sem título, sem prefácio e sem comentários extras, exceto quando isso for solicitado.',
+            },
+            {
+              role: 'user',
+              content: [
+                `Instrução:\n${prompt.trim() || DEFAULT_POSTPROCESS_PROMPT}`,
+                `Transcrição:\n${transcriptText}`,
+              ].join('\n\n'),
+            },
+          ],
+        }),
+        signal,
+      });
+    } catch (error) {
+      if (isLikelyBrowserFetchError(error)) {
+        throw new Error(
+          `Não foi possível conectar à DeepSeek ao processar com ${model}. ` +
+          'Verifique a chave, a conexão e se o navegador permite essa requisição a partir da origem local.'
+        );
+      }
+      throw error;
+    }
+
+    if (!response.ok) {
+      throw new Error(await parseDeepSeekErrorMessage(response));
+    }
+
+    const data = await response.json();
+    const outputText = extractChatCompletionText(data);
+    if (!outputText) {
+      throw new Error('A DeepSeek retornou um resultado vazio no pós-processamento.');
     }
 
     return outputText;

@@ -3,10 +3,16 @@ import { dateStamp } from './storage.js';
 const AUDIO_EXTENSIONS = new Set(['mp3', 'mpeg', 'mpga', 'm4a', 'wav']);
 const VIDEO_EXTENSIONS = new Set(['mp4', 'webm']);
 const MEDIA_EXTENSIONS = new Set([...AUDIO_EXTENSIONS, ...VIDEO_EXTENSIONS]);
-const MEDIA_METADATA_SUFFIX = '-metadata';
+const MEDIA_METADATA_SUFFIX = '-metadados';
+const LEGACY_MEDIA_METADATA_SUFFIX = '-metadata';
 const MEDIA_METADATA_EXTENSION = '.json';
-const MEETING_NOTES_SUFFIX = '-notes';
+const MEETING_NOTES_SUFFIX = '-notas';
+const LEGACY_MEETING_NOTES_SUFFIX = '-notes';
 const MEETING_NOTES_EXTENSION = '.json';
+const TRANSCRIPT_SUFFIX = '-transcricao';
+const TRANSCRIPT_LIVE_SUFFIX = '-transcricao-ao-vivo';
+const LEGACY_TRANSCRIPT_SUFFIX = '-transcript';
+const LEGACY_TRANSCRIPT_LIVE_SUFFIX = '-transcript-live';
 
 function getExtension(fileName) {
   const parts = fileName.toLowerCase().split('.');
@@ -19,38 +25,68 @@ function getBaseName(fileName) {
 
 function getTranscriptStem(mediaFileName, { variant = 'final', suffix = '' } = {}) {
   const baseName = getBaseName(mediaFileName);
-  if (variant === 'live') return `${baseName}-transcript-live`;
+  if (variant === 'live') return `${baseName}${TRANSCRIPT_LIVE_SUFFIX}`;
   return suffix
-    ? `${baseName}-transcript-${suffix}`
-    : `${baseName}-transcript`;
+    ? `${baseName}${TRANSCRIPT_SUFFIX}-${suffix}`
+    : `${baseName}${TRANSCRIPT_SUFFIX}`;
+}
+
+function getLegacyTranscriptStem(mediaFileName, { variant = 'final', suffix = '' } = {}) {
+  const baseName = getBaseName(mediaFileName);
+  if (variant === 'live') return `${baseName}${LEGACY_TRANSCRIPT_LIVE_SUFFIX}`;
+  return suffix
+    ? `${baseName}${LEGACY_TRANSCRIPT_SUFFIX}-${suffix}`
+    : `${baseName}${LEGACY_TRANSCRIPT_SUFFIX}`;
+}
+
+function getTranscriptStems(mediaFileName, { variant = 'final', suffix = '', includeLegacy = false } = {}) {
+  const stems = [getTranscriptStem(mediaFileName, { variant, suffix })];
+  if (includeLegacy) stems.push(getLegacyTranscriptStem(mediaFileName, { variant, suffix }));
+  return stems;
 }
 
 function getMediaMetadataFileName(mediaFileName) {
   return `${getBaseName(mediaFileName)}${MEDIA_METADATA_SUFFIX}${MEDIA_METADATA_EXTENSION}`;
 }
 
+function getMediaMetadataFileNames(mediaFileName) {
+  const baseName = getBaseName(mediaFileName);
+  return [
+    `${baseName}${MEDIA_METADATA_SUFFIX}${MEDIA_METADATA_EXTENSION}`,
+    `${baseName}${LEGACY_MEDIA_METADATA_SUFFIX}${MEDIA_METADATA_EXTENSION}`,
+  ];
+}
+
 function getMeetingNotesFileName(mediaFileName) {
   return `${getBaseName(mediaFileName)}${MEETING_NOTES_SUFFIX}${MEETING_NOTES_EXTENSION}`;
 }
 
-function escapeRegExp(text) {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+function getMeetingNotesFileNames(mediaFileName) {
+  const baseName = getBaseName(mediaFileName);
+  return [
+    `${baseName}${MEETING_NOTES_SUFFIX}${MEETING_NOTES_EXTENSION}`,
+    `${baseName}${LEGACY_MEETING_NOTES_SUFFIX}${MEETING_NOTES_EXTENSION}`,
+  ];
 }
 
 function isTranscriptNameFor(mediaFileName, candidateName, variant = 'any') {
-  const baseName = getBaseName(mediaFileName);
   const hasTxtExtension = (/\.txt$/i).test(candidateName);
-  const finalBaseName = `${baseName}-transcript`;
-  const liveBaseName = `${baseName}-transcript-live`;
+  if (!hasTxtExtension) return false;
 
-  const isLiveTranscript = candidateName === `${liveBaseName}.txt`
-    || (hasTxtExtension && candidateName.startsWith(`${liveBaseName}-`));
-  const isFinalTranscript = candidateName === `${finalBaseName}.txt`
-    || (hasTxtExtension && candidateName.startsWith(`${finalBaseName}-`) && !candidateName.startsWith(`${liveBaseName}-`));
+  const liveStems = getTranscriptStems(mediaFileName, { variant: 'live', includeLegacy: true });
+  const finalStems = getTranscriptStems(mediaFileName, { variant: 'final', includeLegacy: true });
+  const matchesStem = stem => candidateName === `${stem}.txt` || candidateName.startsWith(`${stem}-`);
+
+  const isLiveTranscript = liveStems.some(matchesStem);
+  const isFinalTranscript = finalStems.some(matchesStem) && !isLiveTranscript;
 
   if (variant === 'live') return isLiveTranscript;
   if (variant === 'final') return isFinalTranscript;
   return isLiveTranscript || isFinalTranscript;
+}
+
+function getFirstEntryByName(entriesByName, fileNames) {
+  return fileNames.map(fileName => entriesByName.get(fileName)).find(Boolean) || null;
 }
 
 function parseMediaMetadata(rawText) {
@@ -169,10 +205,8 @@ export class MediaLibrary {
         .map(async entry => {
           const file = await entry.handle.getFile();
           const related = transcriptEntries.filter(candidate => isTranscriptNameFor(entry.name, candidate.name));
-          const metadataName = getMediaMetadataFileName(entry.name);
-          const metadataEntry = metadataEntries.get(metadataName);
-          const notesName = getMeetingNotesFileName(entry.name);
-          const notesEntry = notesEntries.get(notesName);
+          const metadataEntry = getFirstEntryByName(metadataEntries, getMediaMetadataFileNames(entry.name));
+          const notesEntry = getFirstEntryByName(notesEntries, getMeetingNotesFileNames(entry.name));
           let eventDescription = '';
           let notesCount = 0;
 
@@ -225,9 +259,11 @@ export class MediaLibrary {
   }
 
   async getMediaEventInfo(mediaFileName) {
-    const metadataFileName = getMediaMetadataFileName(mediaFileName);
     const entries = await this.#storage.listDirectoryFileHandles();
-    const metadataEntry = entries.find(entry => entry.name === metadataFileName);
+    const metadataFileNames = getMediaMetadataFileNames(mediaFileName);
+    const metadataEntry = metadataFileNames
+      .map(fileName => entries.find(entry => entry.name === fileName))
+      .find(Boolean);
 
     if (!metadataEntry) return null;
 
@@ -242,9 +278,11 @@ export class MediaLibrary {
   }
 
   async getMediaNotesInfo(mediaFileName) {
-    const notesFileName = getMeetingNotesFileName(mediaFileName);
     const entries = await this.#storage.listDirectoryFileHandles();
-    const notesEntry = entries.find(entry => entry.name === notesFileName);
+    const notesFileNames = getMeetingNotesFileNames(mediaFileName);
+    const notesEntry = notesFileNames
+      .map(fileName => entries.find(entry => entry.name === fileName))
+      .find(Boolean);
 
     if (!notesEntry) return null;
 
@@ -261,16 +299,17 @@ export class MediaLibrary {
   }
 
   async deleteMediaEventInfo(mediaFileName) {
-    const fileName = getMediaMetadataFileName(mediaFileName);
-    try {
-      await this.#storage.deleteFile(fileName);
-      return { fileName, deleted: true };
-    } catch (error) {
-      if (error?.name === 'NotFoundError') {
-        return { fileName, deleted: false };
+    const fileNames = getMediaMetadataFileNames(mediaFileName);
+    let deleted = false;
+    for (const fileName of fileNames) {
+      try {
+        await this.#storage.deleteFile(fileName);
+        deleted = true;
+      } catch (error) {
+        if (error?.name !== 'NotFoundError') throw error;
       }
-      throw error;
     }
+    return { fileName: getMediaMetadataFileName(mediaFileName), deleted };
   }
 
   async writeMediaEventInfo(mediaFileName, eventDescription) {
@@ -291,16 +330,17 @@ export class MediaLibrary {
   }
 
   async deleteMeetingNotes(mediaFileName) {
-    const fileName = getMeetingNotesFileName(mediaFileName);
-    try {
-      await this.#storage.deleteFile(fileName);
-      return { fileName, deleted: true };
-    } catch (error) {
-      if (error?.name === 'NotFoundError') {
-        return { fileName, deleted: false };
+    const fileNames = getMeetingNotesFileNames(mediaFileName);
+    let deleted = false;
+    for (const fileName of fileNames) {
+      try {
+        await this.#storage.deleteFile(fileName);
+        deleted = true;
+      } catch (error) {
+        if (error?.name !== 'NotFoundError') throw error;
       }
-      throw error;
     }
+    return { fileName: getMeetingNotesFileName(mediaFileName), deleted };
   }
 
   async writeMeetingNotes(mediaFileName, notes = []) {
@@ -334,17 +374,25 @@ export class MediaLibrary {
     if (!trimmed) throw new Error('A transcrição está vazia.');
 
     const transcriptStem = getTranscriptStem(mediaFileName, { variant, suffix });
+    const transcriptStems = getTranscriptStems(mediaFileName, { variant, suffix, includeLegacy: true });
     const entries = await this.#storage.listDirectoryFileHandles();
-    const transcriptVersionPattern = new RegExp(`^${escapeRegExp(transcriptStem)}-\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}\\.txt$`);
-    const hasStem = entries.some(entry =>
-      entry.name === `${transcriptStem}.txt`
-      || transcriptVersionPattern.test(entry.name)
-    );
+    const hasStem = entries.some(entry => transcriptStems.some(stem =>
+      entry.name === `${stem}.txt` || ((/\.txt$/i).test(entry.name) && entry.name.startsWith(`${stem}-`))
+    ));
     const fileName = !alwaysVersion && !hasStem
       ? `${transcriptStem}.txt`
       : `${transcriptStem}-${dateStamp()}.txt`;
 
     const handle = await this.#storage.writeTextFile(fileName, `${trimmed}\n`);
+    return { fileName, handle };
+  }
+
+  async writeTranscriptFile(fileName, transcriptText) {
+    if (!(/\.txt$/i).test(fileName)) {
+      throw new Error('Somente arquivos .txt de transcrição podem ser editados diretamente.');
+    }
+
+    const handle = await this.#storage.writeTextFile(fileName, transcriptText);
     return { fileName, handle };
   }
 

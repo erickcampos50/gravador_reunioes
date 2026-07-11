@@ -192,7 +192,7 @@ export class RecorderAPI {
 
     const ext        = format === FORMAT_MP4 ? 'mp4' : format === FORMAT_MP3 ? 'mp3' : 'webm';
     const fileHandle = await this.#storage.dirHandle.getFileHandle(
-      `recording-${dateStamp()}.${ext}`, { create: true }
+      `gravacao-${dateStamp()}.${ext}`, { create: true }
     );
     this.#writableStream  = await fileHandle.createWritable();
     this.#savedFileHandle = fileHandle;

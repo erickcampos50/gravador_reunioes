@@ -21,6 +21,7 @@ export const PREFS = {
   postProcessPrompt:        'captura-postProcessPrompt',
   openAiPanelOpen:          'captura-openAiPanelOpen',
   assemblyAiPanelOpen:      'captura-assemblyAiPanelOpen',
+  deepSeekPanelOpen:        'captura-deepSeekPanelOpen',
   transcriptionPanelOpen:   'captura-transcriptionPanelOpen',
 };
 

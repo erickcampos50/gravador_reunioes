@@ -539,6 +539,31 @@ body.captura-auth-locked {
   color: var(--captura-text-muted);
 }
 
+.captura-transcript-label {
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.captura-transcript-edit-btn {
+  border: 1px solid var(--captura-border);
+  border-radius: 999px;
+  background: var(--captura-surface-soft);
+  color: var(--captura-text);
+  padding: 0.22rem 0.68rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.captura-transcript-edit-btn[aria-pressed="true"] {
+  border-color: rgba(0, 102, 204, 0.32);
+  background: var(--captura-info-soft);
+  color: var(--captura-accent);
+}
+
+.captura-transcript-edit-btn:disabled {
+  opacity: 0.45;
+}
+
 .captura-live-output-field .capturatranscript-textarea {
   min-height: 8rem;
 }
@@ -861,8 +886,6 @@ body.captura-auth-locked {
 }
 
 .captura-secondary-actions .btn,
-#openai-api-key-toggle,
-#assemblyai-api-key-toggle,
 .captura-refresh-pill,
 .captura-icon-button,
 .captura-engine-secondary {
@@ -927,8 +950,6 @@ body.captura-auth-locked {
 }
 
 .captura-secondary-actions .btn:hover,
-#openai-api-key-toggle:hover,
-#assemblyai-api-key-toggle:hover,
 .captura-refresh-pill:hover,
 .captura-engine-secondary:hover,
 .captura-record-button:hover,
@@ -1537,6 +1558,12 @@ body.captura-auth-locked {
   resize: vertical;
 }
 
+.capturatranscript-textarea.is-editing {
+  border-color: rgba(0, 102, 204, 0.42);
+  background: #FFFFFF;
+  box-shadow: 0 0 0 0.16rem rgba(0, 102, 204, 0.10);
+}
+
 .capturatranscript-textarea::placeholder,
 .captura-side-card .form-control::placeholder,
 .captura-side-card .form-select::placeholder,
@@ -1555,7 +1582,14 @@ body.captura-auth-locked {
 .captura-refresh-pill:focus,
 .captura-glass-button:focus,
 #openai-api-key-toggle:focus,
-#assemblyai-api-key-toggle:focus {
+#assemblyai-api-key-toggle:focus,
+#deepseek-api-key-toggle:focus {
+  border-color: rgba(0, 102, 204, 0.55);
+  box-shadow: 0 0 0 0.22rem rgba(0, 102, 204, 0.14);
+  outline: none;
+}
+
+.captura-transcript-edit-btn:focus {
   border-color: rgba(0, 102, 204, 0.55);
   box-shadow: 0 0 0 0.22rem rgba(0, 102, 204, 0.14);
   outline: none;

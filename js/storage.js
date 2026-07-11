@@ -37,9 +37,9 @@ function idbPut(db, key, value) {
 
 // ── Utility ──────────────────────────────────────────────────────────────────
 
-// Returns an ISO-8601-like timestamp safe for use in file names.
+// Returns a pt-BR timestamp safe for use in file names.
 export function dateStamp() {
-  const parts = new Intl.DateTimeFormat('sv-SE', {
+  const parts = new Intl.DateTimeFormat('pt-BR', {
     timeZone: 'America/Sao_Paulo',
     year: 'numeric',
     month: '2-digit',
@@ -51,7 +51,7 @@ export function dateStamp() {
   }).formatToParts(new Date());
 
   const byType = Object.fromEntries(parts.map(part => [part.type, part.value]));
-  return `${byType.year}-${byType.month}-${byType.day}T${byType.hour}-${byType.minute}-${byType.second}`;
+  return `${byType.day}-${byType.month}-${byType.year}_${byType.hour}h${byType.minute}m${byType.second}s`;
 }
 
 // ── StorageManager ────────────────────────────────────────────────────────────
