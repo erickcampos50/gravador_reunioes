@@ -8,6 +8,7 @@
 //     app.js can drive the encode pipeline without knowing the Mediabunny API.
 
 const MEDIABUNNY_CDN     = 'https://cdn.jsdelivr.net/npm/mediabunny@1.40.1/+esm';
+const AAC_ENCODER_CDN    = 'https://cdn.jsdelivr.net/npm/@mediabunny/aac-encoder@1.40.1/+esm';
 const MP3_ENCODER_CDN    = 'https://cdn.jsdelivr.net/npm/@mediabunny/mp3-encoder@1.40.1/+esm';
 const OUTPUT_KIND_MP4    = 'mp4-h264-aac';
 const OUTPUT_KIND_MP3    = 'mp3-audio-only';
@@ -16,6 +17,7 @@ export class RecorderCore {
   #output       = null;
   #canvasSource = null;
   #audioSource  = null;
+  #sourceError  = null;
   #hasVideo     = false;
 
   // The Mediabunny audio source; exposed so app.js can pause/resume it
@@ -35,6 +37,16 @@ export class RecorderCore {
   }
 
   static #mp3EncoderRegistration = null;
+  static #aacEncoderRegistration = null;
+
+  static async #ensureAacEncoder() {
+    if (!RecorderCore.#aacEncoderRegistration) {
+      RecorderCore.#aacEncoderRegistration = import(AAC_ENCODER_CDN).then(mod => {
+        mod.registerAacEncoder();
+      });
+    }
+    await RecorderCore.#aacEncoderRegistration;
+  }
 
   static async #ensureMp3Encoder() {
     if (!RecorderCore.#mp3EncoderRegistration) {
@@ -57,12 +69,16 @@ export class RecorderCore {
             StreamTarget, CanvasSource, MediaStreamAudioTrackSource } =
       await RecorderCore.#importMediabunny();
 
+    if (outputKind === OUTPUT_KIND_MP4) {
+      await RecorderCore.#ensureAacEncoder();
+    }
     if (outputKind === OUTPUT_KIND_MP3) {
       await RecorderCore.#ensureMp3Encoder();
     }
 
     const isMp4 = outputKind === OUTPUT_KIND_MP4;
     const isMp3 = outputKind === OUTPUT_KIND_MP3;
+    this.#sourceError = null;
 
     this.#output = new Output({
       format: isMp3
@@ -86,6 +102,9 @@ export class RecorderCore {
       this.#audioSource = new MediaStreamAudioTrackSource(mixedAudioTrack, {
         codec:   isMp3 ? 'mp3' : isMp4 ? 'aac' : 'opus',
         bitrate: 128_000,
+      });
+      this.#audioSource.errorPromise?.catch(error => {
+        this.#sourceError = error instanceof Error ? error : new Error(String(error));
       });
       this.#output.addAudioTrack(this.#audioSource);
     }
@@ -122,7 +141,14 @@ export class RecorderCore {
   // writableStream.close() manually after this — finalize() does it.
   async finalize() {
     await this.#output.finalize();
+    const sourceError = this.#sourceError;
     this.#output = this.#canvasSource = this.#audioSource = null;
+    this.#sourceError = null;
     this.#hasVideo = false;
+
+    if (sourceError) {
+      sourceError.title = sourceError.title || 'Erro de codificação de áudio';
+      throw sourceError;
+    }
   }
 }
