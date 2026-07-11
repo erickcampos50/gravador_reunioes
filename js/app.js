@@ -68,6 +68,9 @@ const AUTH_SESSION_KEY = 'captura-auth-session';
 const AUTH_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const AUTH_DERIVED_BYTES = 32;
 const AUTH_GATE_DESCRIPTION = 'O acesso fica salvo por 30 dias neste navegador.';
+const VIDEO_THUMBNAIL_WIDTH = 156;
+const VIDEO_THUMBNAIL_HEIGHT = 116;
+const VIDEO_THUMBNAIL_TIMEOUT_MS = 7000;
 
 // ── Formatters ─────────────────────────────────────────────────────────────────
 
@@ -341,6 +344,9 @@ let authBootstrapDone          = false;
 let authSubmitPending          = false;
 let pageViewTracked            = false;
 let deviceChangeListenerAttached = false;
+const videoThumbnailCache      = new Map();
+const videoThumbnailPromises   = new Map();
+let videoThumbnailQueue        = Promise.resolve();
 
 // ── Timer state ────────────────────────────────────────────────────────────────
 
@@ -918,6 +924,161 @@ function resetMediaPreview() {
     mediaEl.hidden = true;
   });
   mediaPreviewPlaceholderEl.hidden = false;
+}
+
+function getVideoThumbnailCacheKey(entry) {
+  return `${entry.name}:${entry.size || 0}:${entry.lastModified || 0}`;
+}
+
+function waitForMediaEvent(mediaEl, eventName, timeoutMs = VIDEO_THUMBNAIL_TIMEOUT_MS) {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      window.clearTimeout(timerId);
+      mediaEl.removeEventListener(eventName, handleEvent);
+      mediaEl.removeEventListener('error', handleError);
+    };
+    const handleEvent = () => { cleanup(); resolve(); };
+    const handleError = () => {
+      cleanup();
+      reject(new Error('Não foi possível carregar o vídeo para gerar a miniatura.'));
+    };
+    const timerId = window.setTimeout(() => {
+      cleanup();
+      reject(new Error(`Timeout ao carregar preview do vídeo (${eventName}).`));
+    }, timeoutMs);
+
+    mediaEl.addEventListener(eventName, handleEvent, { once: true });
+    mediaEl.addEventListener('error', handleError, { once: true });
+  });
+}
+
+async function seekVideoForThumbnail(videoEl) {
+  if (videoEl.readyState < HTMLMediaElement.HAVE_METADATA) {
+    await waitForMediaEvent(videoEl, 'loadedmetadata');
+  }
+
+  const duration = Number.isFinite(videoEl.duration) ? videoEl.duration : 0;
+  const seekTime = duration > 2 ? Math.min(1, duration / 4) : 0;
+  if (seekTime > 0) {
+    const seeked = waitForMediaEvent(videoEl, 'seeked');
+    videoEl.currentTime = seekTime;
+    await seeked;
+    return;
+  }
+
+  if (videoEl.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+    await waitForMediaEvent(videoEl, 'loadeddata');
+  }
+}
+
+function drawVideoThumbnail(videoEl) {
+  const canvasEl = document.createElement('canvas');
+  canvasEl.width = VIDEO_THUMBNAIL_WIDTH;
+  canvasEl.height = VIDEO_THUMBNAIL_HEIGHT;
+  const ctx = canvasEl.getContext('2d');
+  const sourceWidth = videoEl.videoWidth || VIDEO_THUMBNAIL_WIDTH;
+  const sourceHeight = videoEl.videoHeight || VIDEO_THUMBNAIL_HEIGHT;
+  const scale = Math.max(VIDEO_THUMBNAIL_WIDTH / sourceWidth, VIDEO_THUMBNAIL_HEIGHT / sourceHeight);
+  const cropWidth = VIDEO_THUMBNAIL_WIDTH / scale;
+  const cropHeight = VIDEO_THUMBNAIL_HEIGHT / scale;
+  const cropX = Math.max(0, (sourceWidth - cropWidth) / 2);
+  const cropY = Math.max(0, (sourceHeight - cropHeight) / 2);
+
+  ctx.fillStyle = '#050607';
+  ctx.fillRect(0, 0, VIDEO_THUMBNAIL_WIDTH, VIDEO_THUMBNAIL_HEIGHT);
+  ctx.drawImage(
+    videoEl,
+    cropX,
+    cropY,
+    cropWidth,
+    cropHeight,
+    0,
+    0,
+    VIDEO_THUMBNAIL_WIDTH,
+    VIDEO_THUMBNAIL_HEIGHT
+  );
+  return canvasEl.toDataURL('image/jpeg', 0.74);
+}
+
+async function generateVideoThumbnail(entry) {
+  const file = await entry.handle.getFile();
+  const objectUrl = URL.createObjectURL(file);
+  const videoEl = document.createElement('video');
+
+  try {
+    videoEl.muted = true;
+    videoEl.playsInline = true;
+    videoEl.preload = 'metadata';
+    videoEl.src = objectUrl;
+    await seekVideoForThumbnail(videoEl);
+    return drawVideoThumbnail(videoEl);
+  } finally {
+    videoEl.pause();
+    videoEl.removeAttribute('src');
+    videoEl.load();
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+function ensureVideoThumbnail(entry) {
+  const cacheKey = getVideoThumbnailCacheKey(entry);
+  if (videoThumbnailCache.has(cacheKey)) return Promise.resolve(videoThumbnailCache.get(cacheKey));
+  if (videoThumbnailPromises.has(cacheKey)) return videoThumbnailPromises.get(cacheKey);
+
+  const promise = videoThumbnailQueue
+    .then(() => generateVideoThumbnail(entry))
+    .then(thumbnailUrl => {
+      videoThumbnailCache.set(cacheKey, thumbnailUrl);
+      videoThumbnailPromises.delete(cacheKey);
+      return thumbnailUrl;
+    })
+    .catch(error => {
+      videoThumbnailPromises.delete(cacheKey);
+      throw error;
+    });
+
+  videoThumbnailQueue = promise.catch(() => {});
+  videoThumbnailPromises.set(cacheKey, promise);
+  return promise;
+}
+
+function setVideoThumbnailPreview(thumbEl, thumbnailUrl, fileName) {
+  const imageEl = document.createElement('img');
+  imageEl.src = thumbnailUrl;
+  imageEl.alt = `Prévia de ${fileName}`;
+  imageEl.loading = 'lazy';
+
+  const playBadge = document.createElement('span');
+  playBadge.className = 'captura-library-thumb-badge';
+  playBadge.innerHTML = '<i class="fas fa-play"></i>';
+
+  thumbEl.classList.remove('is-loading');
+  thumbEl.classList.add('has-preview');
+  thumbEl.replaceChildren(imageEl, playBadge);
+}
+
+function loadVideoThumbnailInto(thumbEl, entry) {
+  const cacheKey = getVideoThumbnailCacheKey(entry);
+  thumbEl.dataset.thumbnailKey = cacheKey;
+
+  const cached = videoThumbnailCache.get(cacheKey);
+  if (cached) {
+    setVideoThumbnailPreview(thumbEl, cached, entry.name);
+    return;
+  }
+
+  thumbEl.classList.add('is-loading');
+  ensureVideoThumbnail(entry)
+    .then(thumbnailUrl => {
+      if (thumbEl.dataset.thumbnailKey === cacheKey) {
+        setVideoThumbnailPreview(thumbEl, thumbnailUrl, entry.name);
+      }
+    })
+    .catch(() => {
+      if (thumbEl.dataset.thumbnailKey === cacheKey) {
+        thumbEl.classList.remove('is-loading');
+      }
+    });
 }
 
 function clearTranscriptViewer(message = 'A transcrição selecionada será exibida aqui.') {
@@ -1517,7 +1678,14 @@ function buildMediaListItem(entry) {
 
   const iconBox = document.createElement('div');
   iconBox.className = 'captura-library-thumb';
-  iconBox.innerHTML = `<i class="fas ${entry.kind === 'video' ? 'fa-circle-play' : 'fa-wave-square'}"></i>`;
+  if (entry.kind === 'video') {
+    iconBox.classList.add('is-video');
+    iconBox.innerHTML = '<i class="fas fa-circle-play"></i>';
+    loadVideoThumbnailInto(iconBox, entry);
+  } else {
+    iconBox.classList.add('is-audio');
+    iconBox.innerHTML = '<i class="fas fa-wave-square"></i>';
+  }
 
   const body = document.createElement('div');
   body.className = 'captura-library-copy';
