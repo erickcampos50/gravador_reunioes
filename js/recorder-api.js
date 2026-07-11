@@ -288,7 +288,8 @@ export class RecorderAPI {
     const paused    = () => this.#totalPausedMs;
     this.#metronome.start(fps, async frameStart => {
       this.#compositor.drawFrame();
-      await this.#recorderCore.addFrame((frameStart - startTime - paused()) / 1000);
+      const timestamp = (frameStart - startTime - paused()) / 1000;
+      await this.#recorderCore.addFrame(timestamp < 0 ? 0 : timestamp);
     });
   }
 
