@@ -1536,9 +1536,34 @@ body.captura-auth-locked {
   color: var(--captura-text-muted);
 }
 
-#transcription-mode-hint,
-#selected-transcript-status {
+#transcription-mode-hint {
   display: none;
+}
+
+.captura-process-status {
+  margin: 0.75rem 0;
+  padding: 0.68rem 0.78rem;
+  border: 1px solid var(--captura-border);
+  border-radius: 12px;
+  background: var(--captura-surface-soft);
+  line-height: 1.45;
+}
+
+.captura-process-status.is-active::before {
+  content: '';
+  display: inline-block;
+  width: 0.55rem;
+  height: 0.55rem;
+  margin-right: 0.55rem;
+  border-radius: 50%;
+  background: var(--captura-accent);
+  box-shadow: 0 0 0 0 rgba(0, 102, 204, 0.3);
+  animation: captura-status-pulse 1.6s ease-out infinite;
+}
+
+@keyframes captura-status-pulse {
+  70% { box-shadow: 0 0 0 0.45rem rgba(0, 102, 204, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(0, 102, 204, 0); }
 }
 
 .capturatranscript-textarea,

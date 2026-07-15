@@ -11,6 +11,7 @@ const SAFE_UPLOAD_BYTES = 24 * 1024 * 1024;
 const LIVE_CHUNK_MS = 10_000;
 const MIN_LIVE_CHUNK_SECONDS = 0.35;
 const NORMALIZED_BITRATE = '64k';
+const NORMALIZED_BYTES_PER_SECOND = 64_000 / 8;
 const NORMALIZED_SAMPLE_RATE = '24000';
 const FILE_CHUNK_SECONDS = 10 * 60;
 const FILE_CHUNK_OVERLAP_SECONDS = 2;
@@ -32,6 +33,11 @@ function isVideoMediaFile(file) {
 
 function blobToFile(blob, fileName, type = blob.type) {
   return new File([blob], fileName, { type: type || 'application/octet-stream' });
+}
+
+function formatFileSize(bytes) {
+  const megabytes = Number(bytes) / (1024 * 1024);
+  return `${megabytes.toFixed(megabytes >= 100 ? 0 : 1)} MB`;
 }
 
 function encodeWavFromFloat32(samples, sampleRate) {
@@ -260,7 +266,10 @@ function getMediaDuration(blob) {
 async function getFfmpeg(onProgress) {
   if (!ffmpegPromise) {
     ffmpegPromise = (async () => {
-      onProgress?.({ stage: 'preparing', message: 'Carregando o kit de mídia no navegador…' });
+      onProgress?.({
+        stage: 'loading-tools',
+        message: 'Carregando o processador de mídia. Na primeira execução, este download pode levar alguns instantes…',
+      });
 
       const ffmpeg = new FFmpeg();
       await ffmpeg.load({
@@ -501,10 +510,12 @@ export class TranscriptionController {
   async transcribeFileHandle(fileHandle, { prompt = '', alwaysVersion = false, onProgress, mode = TRANSCRIPTION_OUTPUT_MODES.plain, engine = '', speechModels = null } = {}) {
     const file = await fileHandle.getFile();
     const result = await this.transcribeFile(file, { prompt, onProgress, mode, engine, speechModels });
+    onProgress?.({ stage: 'saving', message: 'Transcrição concluída. Salvando o arquivo de texto na pasta selecionada…' });
     const savedTranscript = await this.#mediaLibrary.writeTranscript(file.name, result.text, {
       alwaysVersion,
       suffix: TRANSCRIPTION_OUTPUT_MODE_SUFFIXES[mode] || '',
     });
+    onProgress?.({ stage: 'saved', message: `Transcrição salva como ${savedTranscript.fileName}.` });
     return { ...result, ...savedTranscript };
   }
 
@@ -519,14 +530,23 @@ export class TranscriptionController {
     const structuredMode = mode === TRANSCRIPTION_OUTPUT_MODES.timestamps || mode === TRANSCRIPTION_OUTPUT_MODES.diarized;
     const engineLabel = TRANSCRIPTION_ENGINE_LABELS[clientManager.engine] || 'selecionado';
 
+    onProgress?.({
+      stage: 'analyzing',
+      message: `Analisando ${file.name} (${formatFileSize(file.size)}) e definindo a estratégia de envio…`,
+    });
+
     if (!supportedModes.has(mode)) {
       throw new Error(`O motor ${engineLabel} não suporta o modo ${TRANSCRIPTION_OUTPUT_MODE_LABELS[mode] || mode} nesta aplicação.`);
     }
 
     if (!structuredMode) {
       if (!needsNormalization) {
-        onProgress?.({ stage: 'uploading', message: `Enviando ${file.name} para ${engineLabel}…` });
+        onProgress?.({
+          stage: 'uploading',
+          message: `Enviando ${file.name} para ${engineLabel} e aguardando a transcrição. O tempo depende da duração do áudio e da fila da API…`,
+        });
         const text = await clientManager.transcribeFile({ file, prompt, speechModels });
+        onProgress?.({ stage: 'assembling', message: 'Resposta recebida. Preparando o texto final…' });
         return { text: text.trim(), mode };
       }
 
@@ -536,28 +556,39 @@ export class TranscriptionController {
           ? `Extraindo áudio de ${file.name} para transcrição…`
           : `Preparando ${file.name} para transcrição em partes…`,
       });
-      const chunks = await this.#createUploadChunks(file, onProgress);
       let transcript = '';
 
-      for (let index = 0; index < chunks.length; index += 1) {
-        const chunk = chunks[index];
-        const chunkPrompt = buildPrompt(prompt, transcript);
-        onProgress?.({
-          stage: 'transcribing',
-          message: `Transcrevendo parte ${index + 1} de ${chunks.length}…`,
-          current: index + 1,
-          total: chunks.length,
-        });
-        const chunkText = await clientManager.transcribeFile({ file: chunk, prompt: chunkPrompt, speechModels });
-        transcript = mergeTranscriptText(transcript, chunkText);
-      }
+      await this.#processUploadChunks(file, onProgress, {
+        onChunk: async (chunk, index, total) => {
+          const chunkPrompt = buildPrompt(prompt, transcript);
+          onProgress?.({
+            stage: 'uploading',
+            message: `Enviando parte ${index + 1} de ${total} para ${engineLabel} e aguardando a resposta…`,
+            current: index + 1,
+            total,
+          });
+          const chunkText = await clientManager.transcribeFile({ file: chunk, prompt: chunkPrompt, speechModels });
+          onProgress?.({
+            stage: 'assembling',
+            message: `Parte ${index + 1} de ${total} recebida. Integrando ao texto acumulado…`,
+            current: index + 1,
+            total,
+          });
+          transcript = mergeTranscriptText(transcript, chunkText);
+        },
+      });
 
+      onProgress?.({ stage: 'assembling', message: 'Todas as partes foram recebidas. Montando a transcrição final…' });
       return { text: transcript.trim(), mode };
     }
 
     if (!needsNormalization) {
-      onProgress?.({ stage: 'uploading', message: `Enviando ${file.name} para ${engineLabel}…` });
+      onProgress?.({
+        stage: 'uploading',
+        message: `Enviando ${file.name} para ${engineLabel} e aguardando a transcrição estruturada…`,
+      });
       const result = await clientManager.transcribeFileDetailed({ file, prompt, mode, speechModels });
+      onProgress?.({ stage: 'assembling', message: 'Resposta recebida. Organizando segmentos e timestamps…' });
       const segments = normalizeStructuredSegments(result.segments);
       const text = segments.length
         ? formatStructuredTranscript(segments, { includeSpeaker: mode === TRANSCRIPTION_OUTPUT_MODES.diarized })
@@ -576,34 +607,42 @@ export class TranscriptionController {
         ? `Extraindo áudio de ${file.name} para transcrição…`
         : `Preparando ${file.name} para transcrição em partes…`,
     });
-    const chunks = await this.#createUploadChunks(file, onProgress, { includeOffsets: true });
     let transcript = '';
     let structuredSegments = [];
 
-    for (let index = 0; index < chunks.length; index += 1) {
-      const chunk = chunks[index];
-      const chunkPrompt = mode === TRANSCRIPTION_OUTPUT_MODES.diarized ? '' : buildPrompt(prompt, transcript);
-      onProgress?.({
-        stage: 'transcribing',
-        message: `Transcrevendo parte ${index + 1} de ${chunks.length}…`,
-        current: index + 1,
-        total: chunks.length,
-      });
+    await this.#processUploadChunks(file, onProgress, {
+      includeOffsets: true,
+      onChunk: async (chunk, index, total) => {
+        const chunkPrompt = mode === TRANSCRIPTION_OUTPUT_MODES.diarized ? '' : buildPrompt(prompt, transcript);
+        onProgress?.({
+          stage: 'uploading',
+          message: `Enviando parte ${index + 1} de ${total} para ${engineLabel} e aguardando os segmentos…`,
+          current: index + 1,
+          total,
+        });
 
-      const chunkResult = await clientManager.transcribeFileDetailed({
-        file: chunk.file,
-        prompt: chunkPrompt,
-        mode,
-        speechModels,
-      });
+        const chunkResult = await clientManager.transcribeFileDetailed({
+          file: chunk.file,
+          prompt: chunkPrompt,
+          mode,
+          speechModels,
+        });
 
-      const chunkText = (chunkResult.text || '').trim();
-      transcript = mergeTranscriptText(transcript, chunkText);
+        const chunkText = (chunkResult.text || '').trim();
+        onProgress?.({
+          stage: 'assembling',
+          message: `Parte ${index + 1} de ${total} recebida. Ajustando segmentos e timestamps…`,
+          current: index + 1,
+          total,
+        });
+        transcript = mergeTranscriptText(transcript, chunkText);
 
-      const chunkSegments = normalizeStructuredSegments(chunkResult.segments, chunk.startSeconds);
-      structuredSegments = mergeStructuredSegments(structuredSegments, chunkSegments);
-    }
+        const chunkSegments = normalizeStructuredSegments(chunkResult.segments, chunk.startSeconds);
+        structuredSegments = mergeStructuredSegments(structuredSegments, chunkSegments);
+      },
+    });
 
+    onProgress?.({ stage: 'assembling', message: 'Todas as partes foram recebidas. Montando a transcrição estruturada final…' });
     const text = structuredSegments.length
       ? formatStructuredTranscript(structuredSegments, { includeSpeaker: mode === TRANSCRIPTION_OUTPUT_MODES.diarized })
       : transcript.trim();
@@ -616,20 +655,40 @@ export class TranscriptionController {
     };
   }
 
-  async #createUploadChunks(file, onProgress, { includeOffsets = false } = {}) {
+  async #processUploadChunks(file, onProgress, { includeOffsets = false, onChunk } = {}) {
+    if (typeof onChunk !== 'function') throw new Error('O processador das partes de transcrição não foi informado.');
+
+    onProgress?.({ stage: 'analyzing', message: 'Lendo a duração da mídia para calcular quantas partes serão necessárias…' });
+    const sourceDuration = await getMediaDuration(file).catch(() => 0);
     const ffmpeg = await getFfmpeg(onProgress);
     const inputName = `entrada.${getExtension(file.name) || 'bin'}`;
     const normalizedName = 'normalizado.mp3';
+    let inputDeleted = false;
+    let uploadError = null;
+
+    const uploadChunk = async (...args) => {
+      try {
+        await onChunk(...args);
+      } catch (error) {
+        uploadError = error;
+        throw error;
+      }
+    };
 
     try {
+      onProgress?.({
+        stage: 'reading',
+        message: `Carregando ${formatFileSize(file.size)} para processamento local. Em arquivos grandes, esta etapa pode demorar…`,
+      });
       await ffmpeg.writeFile(inputName, await fetchFile(file));
       onProgress?.({
-        stage: 'preparing',
+        stage: 'normalizing',
         message: isVideoMediaFile(file)
-          ? 'Extraindo e compactando o áudio do vídeo…'
-          : 'Compactando áudio para envio ao motor selecionado…',
+          ? 'Extraindo e compactando o áudio do vídeo. Esta costuma ser a etapa local mais demorada; mantenha a aba aberta…'
+          : 'Compactando o áudio para reduzir o tamanho antes do envio. Mantenha a aba aberta…',
       });
-      await ffmpeg.exec([
+      const normalizeExitCode = await ffmpeg.exec([
+        '-y',
         '-i', inputName,
         '-vn',
         '-ac', '1',
@@ -637,28 +696,42 @@ export class TranscriptionController {
         '-b:a', NORMALIZED_BITRATE,
         normalizedName,
       ]);
+      if (normalizeExitCode !== 0) {
+        throw new Error(`A extração do áudio terminou com código ${normalizeExitCode}.`);
+      }
+      await ffmpeg.deleteFile(inputName);
+      inputDeleted = true;
       await new Promise(r => setTimeout(r, 0));
 
-      const normalizedData = await ffmpeg.readFile(normalizedName);
-      const normalizedFile = blobToFile(
-        new Blob([normalizedData], { type: 'audio/mpeg' }),
-        `${file.name.replace(/\.[^.]+$/, '')}-normalizado.mp3`,
-        'audio/mpeg'
-      );
+      let duration = sourceDuration;
+      const shouldSplitByDuration = duration > 0
+        && duration * NORMALIZED_BYTES_PER_SECOND > SAFE_UPLOAD_BYTES;
 
-      if (normalizedFile.size <= SAFE_UPLOAD_BYTES) {
-        const singleChunk = { file: normalizedFile, startSeconds: 0 };
-        return includeOffsets ? [singleChunk] : [normalizedFile];
+      if (!shouldSplitByDuration) {
+        const normalizedData = await ffmpeg.readFile(normalizedName);
+        const normalizedFile = blobToFile(
+          new Blob([normalizedData], { type: 'audio/mpeg' }),
+          `${file.name.replace(/\.[^.]+$/, '')}-normalizado.mp3`,
+          'audio/mpeg'
+        );
+
+        if (normalizedFile.size <= SAFE_UPLOAD_BYTES) {
+          const singleChunk = includeOffsets
+            ? { file: normalizedFile, startSeconds: 0 }
+            : normalizedFile;
+          await uploadChunk(singleChunk, 0, 1);
+          return 1;
+        }
+
+        if (!duration) duration = await getMediaDuration(normalizedFile).catch(() => 0);
       }
 
-      const duration = await getMediaDuration(normalizedFile);
       if (!duration) {
-        const singleChunk = { file: normalizedFile, startSeconds: 0 };
-        return includeOffsets ? [singleChunk] : [normalizedFile];
+        throw new Error('Não foi possível determinar a duração do áudio para dividi-lo com segurança.');
       }
 
-      const chunks = [];
       const stepSeconds = FILE_CHUNK_SECONDS - FILE_CHUNK_OVERLAP_SECONDS;
+      const totalChunks = Math.ceil(duration / stepSeconds);
       let chunkIndex = 0;
 
       for (let start = 0; start < duration; start += stepSeconds) {
@@ -667,12 +740,14 @@ export class TranscriptionController {
         const chunkDuration = Math.min(FILE_CHUNK_SECONDS, Math.max(1, duration - start));
 
         onProgress?.({
-          stage: 'preparing',
-          message: `Recortando parte ${chunkIndex}…`,
+          stage: 'splitting',
+          message: `Recortando parte ${chunkIndex} de ${totalChunks} para envio…`,
           current: chunkIndex,
+          total: totalChunks,
         });
 
-        await ffmpeg.exec([
+        const chunkExitCode = await ffmpeg.exec([
+          '-y',
           '-i', normalizedName,
           '-ss', start.toFixed(3),
           '-t', chunkDuration.toFixed(3),
@@ -681,19 +756,27 @@ export class TranscriptionController {
           '-b:a', NORMALIZED_BITRATE,
           outputName,
         ]);
+        if (chunkExitCode !== 0) {
+          throw new Error(`O recorte da parte ${chunkIndex} terminou com código ${chunkExitCode}.`);
+        }
 
-        const chunkData = await ffmpeg.readFile(outputName);
-        const chunkFile = blobToFile(new Blob([chunkData], { type: 'audio/mpeg' }), `${file.name.replace(/\.[^.]+$/, '')}-parte-${chunkIndex}.mp3`, 'audio/mpeg');
-        chunks.push(includeOffsets ? { file: chunkFile, startSeconds: start } : chunkFile);
-        await ffmpeg.deleteFile(outputName).catch(() => {});
+        try {
+          const chunkData = await ffmpeg.readFile(outputName);
+          const chunkFile = blobToFile(new Blob([chunkData], { type: 'audio/mpeg' }), `${file.name.replace(/\.[^.]+$/, '')}-parte-${chunkIndex}.mp3`, 'audio/mpeg');
+          const chunk = includeOffsets ? { file: chunkFile, startSeconds: start } : chunkFile;
+          await uploadChunk(chunk, chunkIndex - 1, totalChunks);
+        } finally {
+          await ffmpeg.deleteFile(outputName).catch(() => {});
+        }
         await new Promise(r => setTimeout(r, 0));
       }
 
-      return chunks;
+      return totalChunks;
     } catch (error) {
+      if (error === uploadError) throw error;
       throw new Error(`Não foi possível preparar ${file.name} para transcrição. ${error.message}`);
     } finally {
-      await ffmpeg.deleteFile(inputName).catch(() => {});
+      if (!inputDeleted) await ffmpeg.deleteFile(inputName).catch(() => {});
       await ffmpeg.deleteFile(normalizedName).catch(() => {});
     }
   }

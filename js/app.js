@@ -407,12 +407,16 @@ function resetTimer() {
 
 function setInlineStatus(el, message, tone = 'muted') {
   if (!el) return;
+  const isProcessStatus = el.id === 'transcription-status';
   el.textContent = message;
   el.className = `captura-inline-status small ${STATUS_CLASS[tone] || STATUS_CLASS.muted}`;
+  if (isProcessStatus) el.classList.add('captura-process-status');
 }
 
-function setTranscriptionStatus(message, tone = 'muted') {
+function setTranscriptionStatus(message, tone = 'muted', { active = false } = {}) {
   setInlineStatus(transcriptionStatusEl, message, tone);
+  transcriptionStatusEl?.classList.toggle('is-active', active);
+  transcriptionStatusEl?.setAttribute('aria-busy', String(active));
 }
 
 function setSelectedTranscriptStatus(message, tone = 'muted') {
@@ -421,6 +425,12 @@ function setSelectedTranscriptStatus(message, tone = 'muted') {
 
 function setPostProcessStatus(message, tone = 'muted') {
   setInlineStatus(postProcessStatusEl, message, tone);
+}
+
+function reportTranscriptionProgress(payload, { includeSelected = false } = {}) {
+  if (!payload?.message) return;
+  setTranscriptionStatus(payload.message, 'muted', { active: true });
+  if (includeSelected) setSelectedTranscriptStatus(payload.message, 'muted');
 }
 
 function setLiveTranscriptBadge(label, className) {
@@ -2213,7 +2223,11 @@ async function transcribeSelectedMedia({ alwaysVersion = false } = {}) {
   renderMediaFileList();
   render(machine.state);
   setSelectedTranscriptStatus(`Preparando ${mediaName} para transcrição em ${modeLabel} com ${engineLabel}…`, 'muted');
-  setTranscriptionStatus(`Preparando ${mediaName} para transcrição em ${modeLabel} com ${engineLabel}…`, 'muted');
+  setTranscriptionStatus(
+    `Preparando ${mediaName} para transcrição em ${modeLabel} com ${engineLabel}. Arquivos longos podem levar vários minutos; mantenha esta aba aberta.`,
+    'muted',
+    { active: true }
+  );
 
   try {
     const result = await transcriptionController.transcribeFileHandle(mediaHandle, {
@@ -2223,10 +2237,7 @@ async function transcribeSelectedMedia({ alwaysVersion = false } = {}) {
       speechModels,
       mode,
       onProgress: payload => {
-        if (payload?.message) {
-          setSelectedTranscriptStatus(payload.message, 'muted');
-          setTranscriptionStatus(payload.message, 'muted');
-        }
+        reportTranscriptionProgress(payload, { includeSelected: true });
       },
     });
 
@@ -2289,7 +2300,7 @@ async function processSelectedTranscript() {
   renderMediaFileList();
   render(machine.state);
   setPostProcessStatus(`Processando ${transcriptName}${notesSuffix} com ${postProcessModel}…`, 'muted');
-  setTranscriptionStatus(`Processando ${transcriptName}${notesSuffix} com ${postProcessModel}…`, 'muted');
+  setTranscriptionStatus(`Processando ${transcriptName}${notesSuffix} com ${postProcessModel}. Aguarde e mantenha esta aba aberta…`, 'muted', { active: true });
   trackEvent('captura_postprocess_start', {
     file_name: selectedMediaEntry.name,
     model: postProcessModel,
@@ -2441,7 +2452,11 @@ async function finalizeSavedRecordingTranscript(fileHandle) {
   renderMediaFileList();
   render(machine.state);
   setLiveTranscriptBadge('Finalizando', 'badge bg-info');
-  setTranscriptionStatus(`Transcrevendo a gravação salva em ${modeLabel} com ${engineLabel}…`, 'muted');
+  setTranscriptionStatus(
+    `Preparando a gravação salva para transcrição em ${modeLabel} com ${engineLabel}. Isso pode levar vários minutos; mantenha esta aba aberta.`,
+    'muted',
+    { active: true }
+  );
 
   let preferredTranscriptName = '';
 
@@ -2459,7 +2474,7 @@ async function finalizeSavedRecordingTranscript(fileHandle) {
       engine,
       mode,
       onProgress: payload => {
-        if (payload?.message) setTranscriptionStatus(payload.message, 'muted');
+        reportTranscriptionProgress(payload);
       },
     });
 
