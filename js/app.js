@@ -353,8 +353,7 @@ let meetingNotesPrefixEnabled   = false;
 const meetingNotesPostProcessByMedia = new Map();
 let selectedMediaNotesLoading   = false;
 let transcriptEditingEnabled    = false;
-let transcriptEditSaveQueue     = Promise.resolve();
-let transcriptEditSaveSequence  = 0;
+let transcriptEditDirty         = false;
 let authLoadPromise             = null;
 let authRecords                 = [];
 let authFingerprint            = '';
@@ -1151,8 +1150,8 @@ function stopTranscriptEditing({ renderViewer = true } = {}) {
     return;
   }
 
-  transcriptEditSaveSequence += 1;
   transcriptEditingEnabled = false;
+  transcriptEditDirty = false;
   transcriptViewerEl.readOnly = true;
   transcriptViewerEl.classList.remove('is-editing');
   if (renderViewer) renderSelectedTranscriptViewer();
@@ -1173,56 +1172,63 @@ async function startTranscriptEditing() {
   }
 
   transcriptEditingEnabled = true;
+  transcriptEditDirty = false;
   transcriptViewerEl.value = selectedTranscriptRawText;
-  transcriptViewerEl.placeholder = 'Edite a transcrição. Cada alteração será salva no arquivo selecionado.';
+  transcriptViewerEl.placeholder = 'Edite a transcrição e clique em Concluir para salvar.';
   updateTranscriptEditUi();
-  setSelectedTranscriptStatus(`Editando ${transcriptEntry.name}. Cada alteração será salva no arquivo.`, 'muted');
+  setSelectedTranscriptStatus(`Editando ${transcriptEntry.name}. Clique em Concluir para salvar as alterações.`, 'muted');
   transcriptViewerEl.focus();
   transcriptViewerEl.setSelectionRange(transcriptViewerEl.value.length, transcriptViewerEl.value.length);
 }
 
 async function toggleTranscriptEditing() {
   if (transcriptEditingEnabled) {
-    stopTranscriptEditing();
+    await saveTranscriptEditsAndStop();
     return;
   }
 
   await startTranscriptEditing();
 }
 
-function queueTranscriptEditSave() {
+async function saveTranscriptEditsAndStop() {
   if (!transcriptEditingEnabled) return;
   const transcriptEntry = getSelectedTranscriptEntry();
   if (!transcriptEntry) return;
 
   const fileName = transcriptEntry.name;
   const nextText = transcriptViewerEl.value;
-  const saveSequence = ++transcriptEditSaveSequence;
   selectedTranscriptRawText = nextText;
   clearPostProcessCacheForTranscript();
   syncPostProcessOutput();
+
+  if (!transcriptEditDirty) {
+    stopTranscriptEditing();
+    return;
+  }
+
+  transcriptEditBtn.disabled = true;
   setSelectedTranscriptStatus(`Salvando edição em ${fileName}…`, 'muted');
 
-  transcriptEditSaveQueue = transcriptEditSaveQueue
-    .catch(() => {})
-    .then(async () => {
-      const result = await mediaLibrary.writeTranscriptFile(fileName, nextText);
-      transcriptEntry.handle = result.handle;
-      if (saveSequence === transcriptEditSaveSequence) {
-        setSelectedTranscriptStatus(`Edição salva em ${fileName}.`, 'success');
-      }
-    })
-    .catch(error => {
-      if (saveSequence === transcriptEditSaveSequence) {
-        stopTranscriptEditing({ renderViewer: false });
-        handleTranscriptionError(error, {
-          toast: true,
-          dialog: false,
-          updateTranscriptPane: true,
-          updateLivePane: false,
-        });
-      }
+  try {
+    const result = await mediaLibrary.writeTranscriptFile(fileName, nextText);
+    transcriptEntry.handle = result.handle;
+    stopTranscriptEditing();
+    setSelectedTranscriptStatus(`Edição salva em ${fileName}.`, 'success');
+  } catch (error) {
+    const message = error?.message || 'Falha desconhecida ao gravar o arquivo.';
+    setSelectedTranscriptStatus(
+      `Não foi possível salvar. A edição continua aberta; clique em Concluir para tentar novamente. ${message}`,
+      'danger'
+    );
+    handleTranscriptionError(error, {
+      toast: true,
+      dialog: false,
+      updateTranscriptPane: false,
+      updateLivePane: false,
     });
+  } finally {
+    updateTranscriptEditUi();
+  }
 }
 
 function formatMeetingTimePrefix(seconds) {
@@ -2041,7 +2047,7 @@ async function loadSelectedMediaNotes(mediaFileName) {
 function renderSelectedTranscriptViewer() {
   if (transcriptEditingEnabled) {
     transcriptViewerEl.value = selectedTranscriptRawText;
-    transcriptViewerEl.placeholder = 'Edite a transcrição. Cada alteração será salva no arquivo selecionado.';
+    transcriptViewerEl.placeholder = 'Edite a transcrição e clique em Concluir para salvar.';
     return;
   }
 
@@ -3044,7 +3050,12 @@ transcriptEditBtn.addEventListener('click', () => {
 });
 
 transcriptViewerEl.addEventListener('input', () => {
-  queueTranscriptEditSave();
+  if (!transcriptEditingEnabled) return;
+  transcriptEditDirty = true;
+  selectedTranscriptRawText = transcriptViewerEl.value;
+  clearPostProcessCacheForTranscript();
+  syncPostProcessOutput();
+  setSelectedTranscriptStatus('Alterações ainda não salvas. Clique em Concluir para gravar o arquivo.', 'muted');
 });
 
 processSelectedTranscriptBtn.addEventListener('click', () => {
