@@ -17,6 +17,7 @@ const FILE_CHUNK_SECONDS = 10 * 60;
 const FILE_CHUNK_OVERLAP_SECONDS = 2;
 const FFMPEG_CORE_BASE_URL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm';
 const FFMPEG_CLASS_WORKER_URL = new URL('./vendor/ffmpeg/worker.js', import.meta.url).href;
+const API_NATIVE_AUDIO_EXTENSIONS = new Set(['m4a', 'mp3', 'mpga', 'wav']);
 
 let ffmpegPromise = null;
 
@@ -29,6 +30,10 @@ function isVideoMediaFile(file) {
   if (!file) return false;
   const type = typeof file.type === 'string' ? file.type.toLowerCase() : '';
   return type.startsWith('video/') || isVideoFileName(file.name || '');
+}
+
+function needsMp3Conversion(file) {
+  return isVideoMediaFile(file) || !API_NATIVE_AUDIO_EXTENSIONS.has(getExtension(file?.name || ''));
 }
 
 function blobToFile(blob, fileName, type = blob.type) {
@@ -526,7 +531,8 @@ export class TranscriptionController {
     const supportedModes = clientManager?.supportedModes instanceof Set
       ? clientManager.supportedModes
       : new Set(Object.values(TRANSCRIPTION_OUTPUT_MODES));
-    const needsNormalization = file.size > SAFE_UPLOAD_BYTES || isVideoMediaFile(file);
+    const requiresFormatConversion = needsMp3Conversion(file);
+    const needsNormalization = file.size > SAFE_UPLOAD_BYTES || requiresFormatConversion;
     const structuredMode = mode === TRANSCRIPTION_OUTPUT_MODES.timestamps || mode === TRANSCRIPTION_OUTPUT_MODES.diarized;
     const engineLabel = TRANSCRIPTION_ENGINE_LABELS[clientManager.engine] || 'selecionado';
 
@@ -552,8 +558,8 @@ export class TranscriptionController {
 
       onProgress?.({
         stage: 'preparing',
-        message: isVideoMediaFile(file)
-          ? `Extraindo áudio de ${file.name} para transcrição…`
+        message: requiresFormatConversion
+          ? `Convertendo ${file.name} para MP3 antes da transcrição…`
           : `Preparando ${file.name} para transcrição em partes…`,
       });
       let transcript = '';
@@ -603,8 +609,8 @@ export class TranscriptionController {
 
     onProgress?.({
       stage: 'preparing',
-      message: isVideoMediaFile(file)
-        ? `Extraindo áudio de ${file.name} para transcrição…`
+      message: requiresFormatConversion
+        ? `Convertendo ${file.name} para MP3 antes da transcrição…`
         : `Preparando ${file.name} para transcrição em partes…`,
     });
     let transcript = '';
@@ -683,8 +689,8 @@ export class TranscriptionController {
       await ffmpeg.writeFile(inputName, await fetchFile(file));
       onProgress?.({
         stage: 'normalizing',
-        message: isVideoMediaFile(file)
-          ? 'Extraindo e compactando o áudio do vídeo. Esta costuma ser a etapa local mais demorada; mantenha a aba aberta…'
+        message: needsMp3Conversion(file)
+          ? `Convertendo ${getExtension(file.name).toUpperCase() || 'mídia'} para MP3 compatível com as APIs. Esta etapa é local e pode demorar…`
           : 'Compactando o áudio para reduzir o tamanho antes do envio. Mantenha a aba aberta…',
       });
       const normalizeExitCode = await ffmpeg.exec([

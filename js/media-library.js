@@ -1,7 +1,13 @@
 import { dateStamp } from './storage.js';
 
-const AUDIO_EXTENSIONS = new Set(['mp3', 'mpeg', 'mpga', 'm4a', 'wav']);
-const VIDEO_EXTENSIONS = new Set(['mp4', 'webm']);
+const AUDIO_EXTENSIONS = new Set([
+  'aac', 'ac3', 'aif', 'aiff', 'amr', 'ape', 'au', 'caf', 'flac', 'm4a', 'mka',
+  'mp3', 'mpga', 'oga', 'ogg', 'opus', 'wav', 'weba', 'wma', '3ga',
+]);
+const VIDEO_EXTENSIONS = new Set([
+  'avi', 'flv', 'm2ts', 'm4v', 'mkv', 'mov', 'mp4', 'mpeg', 'mpg', 'mts', 'ogv',
+  'ts', 'webm', 'wmv', '3gp', '3gpp',
+]);
 const MEDIA_EXTENSIONS = new Set([...AUDIO_EXTENSIONS, ...VIDEO_EXTENSIONS]);
 const MEDIA_METADATA_SUFFIX = '-metadados';
 const LEGACY_MEDIA_METADATA_SUFFIX = '-metadata';
