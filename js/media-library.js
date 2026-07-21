@@ -19,6 +19,9 @@ const TRANSCRIPT_SUFFIX = '-transcricao';
 const TRANSCRIPT_LIVE_SUFFIX = '-transcricao-ao-vivo';
 const LEGACY_TRANSCRIPT_SUFFIX = '-transcript';
 const LEGACY_TRANSCRIPT_LIVE_SUFFIX = '-transcript-live';
+const BATCH_TRANSCRIPT_SUFFIX = '-transcricao-lote';
+const BATCH_METADATA_SUFFIX = '-metadados-lote';
+const BATCH_METADATA_EXTENSION = '.json';
 
 function getExtension(fileName) {
   const parts = fileName.toLowerCase().split('.');
@@ -89,6 +92,15 @@ function isTranscriptNameFor(mediaFileName, candidateName, variant = 'any') {
   if (variant === 'live') return isLiveTranscript;
   if (variant === 'final') return isFinalTranscript;
   return isLiveTranscript || isFinalTranscript;
+}
+
+function isBatchTranscriptNameFor(candidateName) {
+  if (!(/\.txt$/i).test(candidateName)) return false;
+  return candidateName.startsWith('lote_') && candidateName.includes(TRANSCRIPT_SUFFIX);
+}
+
+function getBatchMetadataFileName(batchId) {
+  return `${batchId}${BATCH_METADATA_SUFFIX}${BATCH_METADATA_EXTENSION}`;
 }
 
 function getFirstEntryByName(entriesByName, fileNames) {
@@ -402,6 +414,29 @@ export class MediaLibrary {
     return { fileName, handle };
   }
 
+  async writeBatchMetadata(batchId, metadata) {
+    const fileName = getBatchMetadataFileName(batchId);
+    const payload = JSON.stringify({
+      version: 1,
+      ...metadata,
+      createdAt: new Date().toISOString(),
+    }, null, 2);
+    const handle = await this.#storage.writeTextFile(fileName, `${payload}\n`);
+    return { fileName, handle };
+  }
+
+  async readBatchMetadata(fileName) {
+    const entries = await this.#storage.listDirectoryFileHandles();
+    const entry = entries.find(e => e.name === fileName);
+    if (!entry) return null;
+    const text = await this.#storage.readTextFile(entry.handle);
+    try {
+      return JSON.parse(text.trim());
+    } catch (_) {
+      return null;
+    }
+  }
+
   async writeTranscriptIncremental(mediaFileName, transcriptText, { variant = 'live', suffix = '' } = {}) {
     const trimmed = transcriptText.trim();
     if (!trimmed) throw new Error('A transcrição está vazia.');
@@ -411,3 +446,5 @@ export class MediaLibrary {
     return { fileName, handle };
   }
 }
+
+export { isBatchTranscriptNameFor };
