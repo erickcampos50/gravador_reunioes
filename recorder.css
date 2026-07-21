@@ -2139,3 +2139,149 @@ body.captura-auth-locked {
     max-width: 100%;
   }
 }
+
+/* ── Batch mode ─────────────────────────────────────────────────────────── */
+
+.captura-batch-mode-control {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--captura-border-soft);
+}
+
+.captura-batch-mode-control .form-check {
+  margin-bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.captura-batch-mode-control .form-check-label {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--captura-text-muted);
+  cursor: pointer;
+}
+
+.captura-batch-mode-control .captura-side-note {
+  font-size: 0.78rem;
+}
+
+.captura-batch-order-panel {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 14px;
+  background: var(--captura-surface-soft);
+  border: 1px solid var(--captura-border-soft);
+}
+
+.captura-batch-order-panel[hidden] {
+  display: none;
+}
+
+.captura-batch-order-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.captura-batch-count {
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--captura-text-muted);
+}
+
+.captura-batch-order-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.captura-batch-order-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--captura-surface);
+  border: 1px solid var(--captura-border-soft);
+  font-size: 0.8rem;
+  transition: background 0.15s;
+}
+
+.captura-batch-order-item:hover {
+  background: var(--captura-surface-elevated);
+}
+
+.captura-batch-order-index {
+  min-width: 18px;
+  text-align: center;
+  font-weight: 600;
+  color: var(--captura-accent);
+  font-size: 0.75rem;
+}
+
+.captura-batch-order-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--captura-text);
+}
+
+.captura-batch-order-actions {
+  display: flex;
+  gap: 2px;
+}
+
+.captura-batch-order-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--captura-text-muted);
+  cursor: pointer;
+  font-size: 0.7rem;
+  transition: background 0.15s, color 0.15s;
+}
+
+.captura-batch-order-btn:hover {
+  background: var(--captura-surface-soft);
+  color: var(--captura-text);
+}
+
+.captura-batch-order-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.captura-library-item .captura-batch-checkbox {
+  display: none;
+  flex-shrink: 0;
+  margin-right: -4px;
+}
+
+.captura-library-item .captura-batch-checkbox .form-check-input {
+  width: 1.25rem;
+  height: 1.25rem;
+  cursor: pointer;
+}
+
+.captura-batch-mode-active .captura-library-item .captura-batch-checkbox {
+  display: flex;
+  align-items: center;
+}
+
+.captura-batch-mode-active .captura-library-item-shell {
+  padding-left: 4px;
+}
