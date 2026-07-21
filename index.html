@@ -416,6 +416,15 @@
           <div id="media-file-list" class="captura-file-list" aria-label="Arquivos de mídia na pasta selecionada"></div>
 
           <section id="media-detail-panel" class="captura-library-detail-panel" hidden>
+            <div id="batch-mode-control" class="captura-batch-mode-control">
+              <label class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" id="batch-mode-toggle">
+                <span class="form-check-label">Modo lote</span>
+              </label>
+              <p class="captura-side-note mb-0" id="batch-mode-hint">
+                Selecione vários áudios para transcrever juntos em um único lote.
+              </p>
+            </div>
             <div class="captura-library-detail-grid">
               <div class="captura-selected-preview">
                 <video id="selected-video-player" class="w-100" controls hidden></video>
@@ -435,6 +444,18 @@
                     <i class="fas fa-copy"></i>
                     <span>Nova versão</span>
                   </button>
+                  <div id="batch-order-panel" class="captura-batch-order-panel" hidden>
+                    <div class="captura-batch-order-header">
+                      <span id="batch-count-label" class="captura-batch-count">0 arquivos selecionados</span>
+                    </div>
+                    <div id="batch-order-list" class="captura-batch-order-list"></div>
+                    <div class="captura-engine-actions">
+                      <button id="batch-transcribe-btn" class="captura-engine-button" disabled>
+                        <i class="fas fa-file-waveform"></i>
+                        <span id="batch-transcribe-label">Transcrever lote</span>
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
 
