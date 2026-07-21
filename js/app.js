@@ -20,6 +20,7 @@ import { RecorderAPI }                           from './recorder-api.js';
 import { RecorderStateMachine, STATE, EVENT }    from './recorder-state-machine.js';
 import { trackEvent }                            from './analytics.js';
 import { MediaLibrary, isVideoFileName }         from './media-library.js';
+import { concatenateAudioFiles }                 from './batch-processor.js';
 import {
   AssemblyAIClientManager,
   AssemblyAIConfigError,
@@ -181,6 +182,14 @@ const postProcessCopyBtn     = document.getElementById('postprocess-copy-btn');
 const postProcessSaveBtn     = document.getElementById('postprocess-save-btn');
 const transcriptionEngineInputs = Array.from(document.querySelectorAll('input[name="transcription-engine"]'));
 const postProcessModelInputs = Array.from(document.querySelectorAll('input[name="postprocess-model"]'));
+
+const batchModeToggle         = document.getElementById('batch-mode-toggle');
+const batchModeHintEl         = document.getElementById('batch-mode-hint');
+const batchOrderPanelEl       = document.getElementById('batch-order-panel');
+const batchOrderListEl        = document.getElementById('batch-order-list');
+const batchTranscribeBtn      = document.getElementById('batch-transcribe-btn');
+const batchTranscribeLabelEl  = document.getElementById('batch-transcribe-label');
+const batchCountLabelEl       = document.getElementById('batch-count-label');
 
 // ── Capability checks ──────────────────────────────────────────────────────────
 
@@ -365,6 +374,10 @@ let deviceChangeListenerAttached = false;
 const videoThumbnailCache      = new Map();
 const videoThumbnailPromises   = new Map();
 let videoThumbnailQueue        = Promise.resolve();
+
+// ── Batch mode state ─────────────────────────────────────────────────────────
+let batchModeEnabled       = false;
+let batchSelectedNames     = [];   // ordered list of selected file names
 
 // ── Timer state ────────────────────────────────────────────────────────────────
 
@@ -1823,6 +1836,22 @@ function buildMediaListItem(entry) {
   const shell = document.createElement('div');
   shell.className = 'captura-library-item-shell';
 
+  const batchCheckbox = document.createElement('div');
+  batchCheckbox.className = 'captura-batch-checkbox';
+  if (batchModeEnabled) {
+    const input = document.createElement('input');
+    input.className = 'form-check-input';
+    input.type = 'checkbox';
+    input.checked = batchSelectedNames.includes(entry.name);
+    input.disabled = !isAudioEntry(entry);
+    input.title = isAudioEntry(entry) ? 'Incluir no lote' : 'Vídeos não podem ser incluídos no lote';
+    input.addEventListener('click', event => {
+      event.stopPropagation();
+      if (isAudioEntry(entry)) toggleBatchSelection(entry.name);
+    });
+    batchCheckbox.appendChild(input);
+  }
+
   const iconBox = document.createElement('div');
   iconBox.className = 'captura-library-thumb';
   if (entry.kind === 'video') {
@@ -1944,7 +1973,7 @@ function buildMediaListItem(entry) {
   detailRow.append(eventLabel);
   bottom.append(metaRow, detailRow);
   body.append(top, bottom);
-  shell.append(iconBox, body);
+  shell.append(batchCheckbox, iconBox, body);
   item.append(shell, chevron);
   article.append(item);
   return { article, item };
@@ -1955,6 +1984,7 @@ function renderMediaFileList() {
   const activeEntryName = selectedMediaEntry?.name;
 
   mediaFileListEl.replaceChildren();
+  mediaFileListEl.classList.toggle('captura-batch-mode-active', batchModeEnabled);
 
   if (!libraryEntries.length) {
     const empty = document.createElement('div');
@@ -2277,6 +2307,95 @@ async function transcribeSelectedMedia({ alwaysVersion = false } = {}) {
   }
 }
 
+async function transcribeBatch() {
+  const entries = getBatchSelectedEntries();
+  if (entries.length < 2) return;
+
+  const engineValue = getSelectedTranscriptionEngine();
+  const baseEngine = getBaseEngine(engineValue);
+  const engineLabel = getSelectedEngineDisplayLabel(engineValue);
+  const speechModels = baseEngine === TRANSCRIPTION_ENGINES.assemblyai ? getAssemblyAiSpeechModels(engineValue) : null;
+  const mode = getTranscriptionMode();
+  const modeLabel = TRANSCRIPTION_OUTPUT_MODE_LABELS[mode] || TRANSCRIPTION_OUTPUT_MODE_LABELS.plain;
+
+  try {
+    getTranscriptionClient(baseEngine).assertConfigured();
+  } catch (error) {
+    handleTranscriptionError(error, {
+      toast: false,
+      dialog: true,
+      updateTranscriptPane: true,
+      updateLivePane: true,
+    });
+    return;
+  }
+
+  transcriptionBusy = true;
+  renderMediaFileList();
+  render(machine.state);
+  setTranscriptionStatus(
+    `Concatenando ${entries.length} áudios e transcrevendo em lote com ${engineLabel}…`,
+    'muted',
+    { active: true }
+  );
+
+  try {
+    const { blob } = await concatenateAudioFiles(entries, payload => {
+      reportTranscriptionProgress(payload);
+    });
+
+    const batchId = `lote_${dateStamp()}`;
+    const combinedFile = new File([blob], `${batchId}.mp3`, { type: 'audio/mpeg' });
+
+    setTranscriptionStatus(
+      `Enviando lote de ${entries.length} arquivos para ${engineLabel}…`,
+      'muted',
+      { active: true }
+    );
+
+    const result = await transcriptionController.transcribeFile(combinedFile, {
+      prompt: getFileTranscriptionPrompt(),
+      engine: baseEngine,
+      speechModels,
+      mode,
+      onProgress: payload => {
+        reportTranscriptionProgress(payload);
+      },
+    });
+
+    const transcriptFileName = `${batchId}-transcricao.txt`;
+    await storage.writeTextFile(transcriptFileName, `${result.text.trim()}\n`);
+
+    await mediaLibrary.writeBatchMetadata(batchId, {
+      files: entries.map((e, i) => ({ name: e.name, order: i + 1 })),
+      engine: engineValue,
+      mode,
+      transcriptFileName,
+    });
+
+    showToast(`Transcrição em lote salva como ${transcriptFileName}.`, 'success');
+    setTranscriptionStatus(`Transcrição em lote salva como ${transcriptFileName}.`, 'success');
+
+    batchModeEnabled = false;
+    batchSelectedNames = [];
+    if (batchModeToggle) batchModeToggle.checked = false;
+    toggleBatchMode(false);
+
+    await refreshMediaLibrary({ silent: true });
+  } catch (error) {
+    handleTranscriptionError(error, {
+      toast: true,
+      dialog: false,
+      updateTranscriptPane: true,
+      updateLivePane: true,
+    });
+  } finally {
+    transcriptionBusy = false;
+    renderMediaFileList();
+    render(machine.state);
+  }
+}
+
 async function processSelectedTranscript() {
   const transcriptText = buildTranscriptProcessingText();
   if (!selectedMediaEntry || !transcriptVersionSel.value || !transcriptText.trim()) return;
@@ -2584,6 +2703,7 @@ function render(state) {
   refreshLibraryBtn.disabled = lockControls || !storage.dirHandle;
   transcribeSelectedBtn.disabled = lockControls || !selectedMediaEntry;
   transcribeNewVersionBtn.disabled = lockControls || !selectedMediaEntry;
+  updateBatchTranscribeButton();
   transcriptVersionSel.disabled = lockControls || selectedTranscriptEntries.length === 0;
   processSelectedTranscriptBtn.disabled = lockControls || !hasSelectedTranscript;
   postProcessPromptEl.disabled = lockControls;
@@ -2824,6 +2944,127 @@ function refreshAdvisoryUi() {
   updateFormatHint();
   updateLongRecordingAlert();
   updateRecordingEstimate();
+}
+
+// ── Batch mode helpers ───────────────────────────────────────────────────────
+
+function isAudioEntry(entry) {
+  return entry?.kind === 'audio';
+}
+
+function getBatchSelectedEntries() {
+  return batchSelectedNames
+    .map(name => libraryEntries.find(e => e.name === name))
+    .filter(Boolean);
+}
+
+function renderBatchOrderPanel() {
+  if (!batchOrderPanelEl || !batchOrderListEl || !batchCountLabelEl) return;
+
+  const entries = getBatchSelectedEntries();
+  batchOrderPanelEl.hidden = entries.length < 2;
+  batchCountLabelEl.textContent = `${entries.length} arquivo${entries.length === 1 ? '' : 's'} selecionado${entries.length === 1 ? '' : 's'}`;
+  batchOrderListEl.replaceChildren();
+
+  if (entries.length < 2) return;
+
+  entries.forEach((entry, index) => {
+    const item = document.createElement('div');
+    item.className = 'captura-batch-order-item';
+    item.dataset.name = entry.name;
+
+    const idx = document.createElement('span');
+    idx.className = 'captura-batch-order-index';
+    idx.textContent = `${index + 1}`;
+
+    const name = document.createElement('span');
+    name.className = 'captura-batch-order-name';
+    name.textContent = entry.name;
+    name.title = entry.name;
+
+    const actions = document.createElement('div');
+    actions.className = 'captura-batch-order-actions';
+
+    const upBtn = document.createElement('button');
+    upBtn.type = 'button';
+    upBtn.className = 'captura-batch-order-btn';
+    upBtn.innerHTML = '<i class="fas fa-chevron-up"></i>';
+    upBtn.title = 'Mover para cima';
+    upBtn.disabled = index === 0;
+    upBtn.addEventListener('click', () => {
+      if (index > 0) {
+        const temp = batchSelectedNames[index];
+        batchSelectedNames[index] = batchSelectedNames[index - 1];
+        batchSelectedNames[index - 1] = temp;
+        renderBatchOrderPanel();
+        renderMediaFileList();
+      }
+    });
+
+    const downBtn = document.createElement('button');
+    downBtn.type = 'button';
+    downBtn.className = 'captura-batch-order-btn';
+    downBtn.innerHTML = '<i class="fas fa-chevron-down"></i>';
+    downBtn.title = 'Mover para baixo';
+    downBtn.disabled = index === entries.length - 1;
+    downBtn.addEventListener('click', () => {
+      if (index < entries.length - 1) {
+        const temp = batchSelectedNames[index];
+        batchSelectedNames[index] = batchSelectedNames[index + 1];
+        batchSelectedNames[index + 1] = temp;
+        renderBatchOrderPanel();
+        renderMediaFileList();
+      }
+    });
+
+    actions.append(upBtn, downBtn);
+    item.append(idx, name, actions);
+    batchOrderListEl.append(item);
+  });
+}
+
+function updateBatchTranscribeButton() {
+  const count = batchSelectedNames.length;
+  if (batchTranscribeLabelEl) {
+    batchTranscribeLabelEl.textContent = count >= 2
+      ? `Transcrever lote (${count} arquivos)`
+      : 'Transcrever lote';
+  }
+  if (batchTranscribeBtn) {
+    batchTranscribeBtn.disabled = count < 2 || transcriptionBusy || postProcessingBusy;
+  }
+}
+
+function toggleBatchMode(enabled) {
+  batchModeEnabled = enabled;
+  if (!enabled) {
+    batchSelectedNames = [];
+  }
+  mediaFileListEl.classList.toggle('captura-batch-mode-active', enabled);
+  if (batchModeHintEl) {
+    batchModeHintEl.textContent = enabled
+      ? 'Clique nos áudios para selecioná-los. Defina a ordem no painel abaixo.'
+      : 'Selecione vários áudios para transcrever juntos em um único lote.';
+  }
+  renderBatchOrderPanel();
+  updateBatchTranscribeButton();
+  renderMediaFileList();
+}
+
+function toggleBatchSelection(name) {
+  const index = batchSelectedNames.indexOf(name);
+  if (index >= 0) {
+    batchSelectedNames.splice(index, 1);
+  } else {
+    if (batchSelectedNames.length >= 20) {
+      showToast('Limite de 20 arquivos por lote.', 'warning');
+      return;
+    }
+    batchSelectedNames.push(name);
+  }
+  renderBatchOrderPanel();
+  updateBatchTranscribeButton();
+  renderMediaFileList();
 }
 
 // ── Device enumeration ────────────────────────────────────────────────────────
@@ -3200,6 +3441,15 @@ postProcessSaveBtn.addEventListener('click', async () => {
 
 authGateFormEl?.addEventListener('submit', event => {
   void handleAuthSubmit(event);
+});
+
+batchModeToggle?.addEventListener('change', () => {
+  toggleBatchMode(batchModeToggle.checked);
+  trackEvent('captura_pref_change', { pref: 'batch_mode', value: String(batchModeToggle.checked) });
+});
+
+batchTranscribeBtn?.addEventListener('click', () => {
+  void transcribeBatch();
 });
 
 errorDialog?.addEventListener('close', () => {
