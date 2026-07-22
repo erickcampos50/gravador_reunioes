@@ -437,6 +437,41 @@ export class MediaLibrary {
     }
   }
 
+  async getBatchTranscriptsForFile(mediaFileName) {
+    const entries = await this.#storage.listDirectoryFileHandles();
+    const batchMetaEntries = entries.filter(e =>
+      e.name.startsWith('lote_') && e.name.endsWith(BATCH_METADATA_EXTENSION)
+    );
+
+    const results = [];
+    for (const metaEntry of batchMetaEntries) {
+      const text = await this.#storage.readTextFile(metaEntry.handle);
+      let meta;
+      try { meta = JSON.parse(text.trim()); } catch (_) { continue; }
+
+      const isOrigin = meta.originFile === mediaFileName;
+      const isInFiles = Array.isArray(meta.files) && meta.files.some(f => f.name === mediaFileName);
+      if (!isOrigin && !isInFiles) continue;
+
+      const transcriptName = meta.transcriptFileName;
+      if (!transcriptName) continue;
+
+      const transcriptEntry = entries.find(e => e.name === transcriptName);
+      if (!transcriptEntry) continue;
+
+      const file = await transcriptEntry.handle.getFile();
+      results.push({
+        name: transcriptName,
+        handle: transcriptEntry.handle,
+        lastModified: file.lastModified || 0,
+        batchId: metaEntry.name.replace(/-metadados-lote\.json$/, ''),
+        fileCount: Array.isArray(meta.files) ? meta.files.length : 0,
+      });
+    }
+
+    return results.sort((a, b) => b.lastModified - a.lastModified);
+  }
+
   async writeTranscriptIncremental(mediaFileName, transcriptText, { variant = 'live', suffix = '' } = {}) {
     const trimmed = transcriptText.trim();
     if (!trimmed) throw new Error('A transcrição está vazia.');
