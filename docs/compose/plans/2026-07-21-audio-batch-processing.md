@@ -1,3 +1,7 @@
+---
+published: false
+---
+
 # Audio Batch Processing Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use compose:subagent (recommended) or compose:execute to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.

@@ -1,3 +1,7 @@
+---
+published: false
+---
+
 # Design: Processamento em Lote de Áudios
 
 ## [S1] Problema
