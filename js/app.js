@@ -10,7 +10,7 @@
 import { AudioMixer }                            from './audio-mixer.js';
 import { Compositor }                            from './compositor.js';
 import { Metronome }                             from './metronome.js';
-import { StorageManager }                        from './storage.js';
+import { StorageManager, dateStamp }              from './storage.js';
 import { RecorderCore }                          from './recorder-core.js';
 import { PREFS, savePref, loadPref }             from './prefs.js';
 import { showAlert, showToast, showErrorDialog } from './dialogs.js';
@@ -378,6 +378,7 @@ let videoThumbnailQueue        = Promise.resolve();
 // ── Batch mode state ─────────────────────────────────────────────────────────
 let batchModeEnabled       = false;
 let batchSelectedNames     = [];   // ordered list of selected file names
+let batchOriginFile        = '';   // file where batch mode was first activated
 
 // ── Timer state ────────────────────────────────────────────────────────────────
 
@@ -2094,7 +2095,12 @@ function renderSelectedTranscriptViewer() {
 }
 
 async function loadTranscriptEntries(mediaFileName, preferredTranscriptName = '') {
-  selectedTranscriptEntries = await mediaLibrary.getRelatedTranscripts(mediaFileName);
+  const [individualEntries, batchEntries] = await Promise.all([
+    mediaLibrary.getRelatedTranscripts(mediaFileName),
+    mediaLibrary.getBatchTranscriptsForFile(mediaFileName),
+  ]);
+
+  selectedTranscriptEntries = [...individualEntries, ...batchEntries];
   transcriptVersionSel.replaceChildren();
 
   if (!selectedTranscriptEntries.length) {
@@ -2112,8 +2118,12 @@ async function loadTranscriptEntries(mediaFileName, preferredTranscriptName = ''
     return;
   }
 
-  selectedTranscriptEntries.forEach(entry => {
+  individualEntries.forEach(entry => {
     transcriptVersionSel.add(new Option(entry.name, entry.name));
+  });
+  batchEntries.forEach(entry => {
+    const label = `[Lote] ${entry.name} (${entry.fileCount} áudios)`;
+    transcriptVersionSel.add(new Option(label, entry.name));
   });
   transcriptVersionSel.disabled = false;
 
@@ -2143,14 +2153,36 @@ async function loadSelectedTranscript() {
 
   const transcriptText = await mediaLibrary.readTranscript(transcriptEntry.handle);
   selectedTranscriptRawText = transcriptText;
+
+  let batchInfo = '';
+  if (transcriptEntry.name.startsWith('lote_')) {
+    const metaEntries = await mediaLibrary.getBatchTranscriptsForFile(selectedMediaEntry?.name || '');
+    const batchMeta = metaEntries.find(e => e.name === transcriptEntry.name);
+    if (batchMeta) {
+      const meta = await mediaLibrary.readBatchMetadata(
+        `${batchMeta.batchId}-metadados-lote.json`
+      );
+      if (meta?.files?.length) {
+        const fileNames = meta.files.map(f => f.name).join(', ');
+        batchInfo = ` composto por: ${fileNames}`;
+      }
+    }
+    selectedTranscriptRawText = selectedTranscriptRawText.replace(
+      /^=== TRANSCRIÇÃO EM LOTE ===\n[\s\S]*?\n\n/,
+      ''
+    );
+  }
+
   renderSelectedTranscriptViewer();
   if (selectedMediaEntry?.name) {
     selectedTranscriptNameByMedia.set(selectedMediaEntry.name, transcriptEntry.name);
   }
   setSelectedTranscriptStatus(
-    hasMeetingNotes(selectedMediaNotesInfo)
-      ? `Exibindo ${transcriptEntry.name} com notas da reunião.`
-      : `Exibindo ${transcriptEntry.name}.`,
+    batchInfo
+      ? `Exibindo ${transcriptEntry.name}.${batchInfo}`
+      : hasMeetingNotes(selectedMediaNotesInfo)
+        ? `Exibindo ${transcriptEntry.name} com notas da reunião.`
+        : `Exibindo ${transcriptEntry.name}.`,
     'success'
   );
   syncPostProcessOutput();
@@ -2364,20 +2396,26 @@ async function transcribeBatch() {
     });
 
     const transcriptFileName = `${batchId}-transcricao.txt`;
-    await storage.writeTextFile(transcriptFileName, `${result.text.trim()}\n`);
+    const fileList = entries.map((e, i) => `  ${i + 1}. ${e.name}`).join('\n');
+    const header = [
+      '=== TRANSCRIÇÃO EM LOTE ===',
+      `Arquivos (${entries.length}):`,
+      fileList,
+      '',
+    ].join('\n');
+    await storage.writeTextFile(transcriptFileName, `${header}${result.text.trim()}\n`);
 
     await mediaLibrary.writeBatchMetadata(batchId, {
       files: entries.map((e, i) => ({ name: e.name, order: i + 1 })),
       engine: engineValue,
       mode,
       transcriptFileName,
+      originFile: batchOriginFile || entries[0]?.name || '',
     });
 
     showToast(`Transcrição em lote salva como ${transcriptFileName}.`, 'success');
     setTranscriptionStatus(`Transcrição em lote salva como ${transcriptFileName}.`, 'success');
 
-    batchModeEnabled = false;
-    batchSelectedNames = [];
     if (batchModeToggle) batchModeToggle.checked = false;
     toggleBatchMode(false);
 
@@ -2996,6 +3034,7 @@ function renderBatchOrderPanel() {
         const temp = batchSelectedNames[index];
         batchSelectedNames[index] = batchSelectedNames[index - 1];
         batchSelectedNames[index - 1] = temp;
+        savePref(PREFS.batchSelection, JSON.stringify(batchSelectedNames));
         renderBatchOrderPanel();
         renderMediaFileList();
       }
@@ -3012,6 +3051,7 @@ function renderBatchOrderPanel() {
         const temp = batchSelectedNames[index];
         batchSelectedNames[index] = batchSelectedNames[index + 1];
         batchSelectedNames[index + 1] = temp;
+        savePref(PREFS.batchSelection, JSON.stringify(batchSelectedNames));
         renderBatchOrderPanel();
         renderMediaFileList();
       }
@@ -3037,9 +3077,19 @@ function updateBatchTranscribeButton() {
 
 function toggleBatchMode(enabled) {
   batchModeEnabled = enabled;
-  if (!enabled) {
+  if (enabled) {
+    if (selectedMediaEntry?.name && !batchSelectedNames.includes(selectedMediaEntry.name)) {
+      batchSelectedNames = [selectedMediaEntry.name];
+    }
+    if (!batchOriginFile && selectedMediaEntry?.name) {
+      batchOriginFile = selectedMediaEntry.name;
+    }
+  } else {
     batchSelectedNames = [];
+    batchOriginFile = '';
   }
+  savePref(PREFS.batchMode, String(enabled));
+  savePref(PREFS.batchSelection, JSON.stringify(batchSelectedNames));
   mediaFileListEl.classList.toggle('captura-batch-mode-active', enabled);
   if (batchModeHintEl) {
     batchModeHintEl.textContent = enabled
@@ -3062,6 +3112,7 @@ function toggleBatchSelection(name) {
     }
     batchSelectedNames.push(name);
   }
+  savePref(PREFS.batchSelection, JSON.stringify(batchSelectedNames));
   renderBatchOrderPanel();
   updateBatchTranscribeButton();
   renderMediaFileList();
@@ -3171,6 +3222,16 @@ function restoreSimplePrefs() {
   restoreDetailsPref(deepSeekPanel, PREFS.deepSeekPanelOpen);
   updateTranscriptionUiCapabilities();
   updateTranscriptionModeHint();
+
+  const savedBatchMode = loadPref(PREFS.batchMode);
+  if (savedBatchMode === 'true') {
+    const savedSelection = loadPref(PREFS.batchSelection);
+    if (savedSelection) {
+      try { batchSelectedNames = JSON.parse(savedSelection); } catch (_) { batchSelectedNames = []; }
+    }
+    batchModeEnabled = true;
+    if (batchModeToggle) batchModeToggle.checked = true;
+  }
 }
 
 function restoreDevicePrefs() {
