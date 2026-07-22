@@ -1,2 +1,5 @@
 .env
 captura-acesso.source.txt
+recording-*.mp3
+lote_*.txt
+lote_*.json
