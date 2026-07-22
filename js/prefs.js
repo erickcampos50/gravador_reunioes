@@ -23,6 +23,8 @@ export const PREFS = {
   assemblyAiPanelOpen:      'captura-assemblyAiPanelOpen',
   deepSeekPanelOpen:        'captura-deepSeekPanelOpen',
   transcriptionPanelOpen:   'captura-transcriptionPanelOpen',
+  batchMode:                'captura-batchMode',
+  batchSelection:           'captura-batchSelection',
 };
 
 export const savePref = (k, v) => { try { localStorage.setItem(k, v); } catch (_) {} };
