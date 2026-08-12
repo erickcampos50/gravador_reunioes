@@ -442,8 +442,9 @@ function setPostProcessStatus(message, tone = 'muted') {
 
 function reportTranscriptionProgress(payload, { includeSelected = false } = {}) {
   if (!payload?.message) return;
-  setTranscriptionStatus(payload.message, 'muted', { active: true });
-  if (includeSelected) setSelectedTranscriptStatus(payload.message, 'muted');
+  const tone = payload.stage === 'partial-failure' ? 'warning' : 'muted';
+  setTranscriptionStatus(payload.message, tone, { active: true });
+  if (includeSelected) setSelectedTranscriptStatus(payload.message, tone);
 }
 
 function showPartialTranscript({ text = '', current = 0, total = 0 } = {}) {

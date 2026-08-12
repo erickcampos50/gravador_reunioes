@@ -604,9 +604,11 @@ export class TranscriptionController {
             total,
           });
           let chunkText = '';
+          let chunkFailed = false;
           try {
             chunkText = await clientManager.transcribeFile({ file: chunk, prompt: chunkPrompt, speechModels });
           } catch (error) {
+            chunkFailed = true;
             partialFailures.push({ index: index + 1, message: error?.message || String(error) });
             onProgress?.({
               stage: 'partial-failure',
@@ -617,7 +619,9 @@ export class TranscriptionController {
           }
           onProgress?.({
             stage: 'assembling',
-            message: `Parte ${index + 1} de ${total} recebida. Integrando ao texto acumulado…`,
+            message: chunkFailed
+              ? `Parte ${index + 1} de ${total} ignorada. Integrando as partes disponíveis…`
+              : `Parte ${index + 1} de ${total} recebida. Integrando ao texto acumulado…`,
             current: index + 1,
             total,
           });
@@ -683,6 +687,7 @@ export class TranscriptionController {
         });
 
         let chunkResult = null;
+        let chunkFailed = false;
         try {
           chunkResult = await clientManager.transcribeFileDetailed({
             file: chunk.file,
@@ -691,6 +696,7 @@ export class TranscriptionController {
             speechModels,
           });
         } catch (error) {
+          chunkFailed = true;
           partialFailures.push({ index: index + 1, message: error?.message || String(error) });
           onProgress?.({
             stage: 'partial-failure',
@@ -703,7 +709,9 @@ export class TranscriptionController {
         const chunkText = (chunkResult?.text || '').trim();
         onProgress?.({
           stage: 'assembling',
-          message: `Parte ${index + 1} de ${total} recebida. Ajustando segmentos e timestamps…`,
+          message: chunkFailed
+            ? `Parte ${index + 1} de ${total} ignorada. Ajustando as partes disponíveis…`
+            : `Parte ${index + 1} de ${total} recebida. Ajustando segmentos e timestamps…`,
           current: index + 1,
           total,
         });
