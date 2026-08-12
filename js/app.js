@@ -446,6 +446,27 @@ function reportTranscriptionProgress(payload, { includeSelected = false } = {}) 
   if (includeSelected) setSelectedTranscriptStatus(payload.message, 'muted');
 }
 
+function showPartialTranscript({ text = '', current = 0, total = 0 } = {}) {
+  const trimmed = String(text || '').trim();
+  if (!trimmed) return;
+  transcriptViewerEl.value = trimmed;
+  const partLabel = current && total ? `Parte ${current} de ${total} transcrita. ` : '';
+  transcriptViewerEl.placeholder = `${partLabel}Texto parcial exibido enquanto a transcrição continua…`;
+}
+
+function reportPartialTranscriptionFailures(partialFailures, { fileName = '' } = {}) {
+  if (!Array.isArray(partialFailures) || !partialFailures.length) return;
+  const count = partialFailures.length;
+  const list = partialFailures.map(failure => `  - Parte ${failure.index}: ${failure.message}`).join('\n');
+  showToast(`Transcrição concluída, mas ${count} parte${count > 1 ? 's' : ''} falharam.`, 'warning');
+  setTranscriptionStatus(`Transcrição concluída com ${count} parte${count > 1 ? 's' : ''} com erro.`, 'warning');
+  showErrorDialog(
+    'Transcrição parcial com avisos',
+    `A transcrição foi salva em ${fileName || 'arquivo de texto'}, mas ${count} parte${count > 1 ? 's' : ''} não puderam ser transcritas:\n\n${list}\n\nVocê pode tentar transcrever novamente as partes pendentes.`,
+    null
+  );
+}
+
 function setLiveTranscriptBadge(label, className) {
   liveTranscriptBadgeEl.textContent = label;
   liveTranscriptBadgeEl.className = className;
@@ -2307,11 +2328,13 @@ async function transcribeSelectedMedia({ alwaysVersion = false } = {}) {
       onProgress: payload => {
         reportTranscriptionProgress(payload, { includeSelected: true });
       },
+      onPartial: showPartialTranscript,
     });
 
     showToast(`Transcrição salva como ${result.fileName}.`, 'success');
     setSelectedTranscriptStatus(`Transcrição salva como ${result.fileName}.`, 'success');
     setTranscriptionStatus(`Transcrição salva como ${result.fileName}.`, 'success');
+    reportPartialTranscriptionFailures(result.partialFailures, { fileName: result.fileName });
     trackEvent('captura_transcription_saved', {
       file_name: mediaName,
       engine: baseEngine,
@@ -2378,6 +2401,16 @@ async function transcribeBatch() {
 
     const batchId = `lote_${dateStamp()}`;
     const combinedFile = new File([blob], `${batchId}.mp3`, { type: 'audio/mpeg' });
+    const transcriptFileName = `${batchId}-transcricao.txt`;
+    const fileList = entries.map((e, i) => `  ${i + 1}. ${e.name}`).join('\n');
+    const header = [
+      '=== TRANSCRIÇÃO EM LOTE ===',
+      `Arquivos (${entries.length}):`,
+      fileList,
+      '',
+    ].join('\n');
+    let batchIncrementalWrite = Promise.resolve();
+    let latestBatchText = '';
 
     setTranscriptionStatus(
       `Enviando lote de ${entries.length} arquivos para ${engineLabel}…`,
@@ -2393,16 +2426,18 @@ async function transcribeBatch() {
       onProgress: payload => {
         reportTranscriptionProgress(payload);
       },
+      onPartial: payload => {
+        showPartialTranscript(payload);
+        const text = String(payload?.text || '').trim();
+        if (text && text !== latestBatchText) {
+          latestBatchText = text;
+          batchIncrementalWrite = batchIncrementalWrite
+            .then(() => storage.writeTextFile(transcriptFileName, `${header}${text}\n`).catch(() => {}));
+        }
+      },
     });
+    await batchIncrementalWrite;
 
-    const transcriptFileName = `${batchId}-transcricao.txt`;
-    const fileList = entries.map((e, i) => `  ${i + 1}. ${e.name}`).join('\n');
-    const header = [
-      '=== TRANSCRIÇÃO EM LOTE ===',
-      `Arquivos (${entries.length}):`,
-      fileList,
-      '',
-    ].join('\n');
     await storage.writeTextFile(transcriptFileName, `${header}${result.text.trim()}\n`);
 
     await mediaLibrary.writeBatchMetadata(batchId, {
@@ -2415,6 +2450,7 @@ async function transcribeBatch() {
 
     showToast(`Transcrição em lote salva como ${transcriptFileName}.`, 'success');
     setTranscriptionStatus(`Transcrição em lote salva como ${transcriptFileName}.`, 'success');
+    reportPartialTranscriptionFailures(result.partialFailures, { fileName: transcriptFileName });
 
     if (batchModeToggle) batchModeToggle.checked = false;
     toggleBatchMode(false);
@@ -2639,12 +2675,14 @@ async function finalizeSavedRecordingTranscript(fileHandle) {
       onProgress: payload => {
         reportTranscriptionProgress(payload);
       },
+      onPartial: showPartialTranscript,
     });
 
     preferredTranscriptName = result.fileName;
     showToast(`Transcrição salva como ${result.fileName}.`, 'success');
     setTranscriptionStatus(`Transcrição salva como ${result.fileName}.`, 'success');
     setLiveTranscriptBadge('Salvo', 'badge bg-success');
+    reportPartialTranscriptionFailures(result.partialFailures, { fileName: result.fileName });
     trackEvent('captura_recording_transcript_saved', { engine, transcript_name: result.fileName, mode });
 
     await refreshMediaLibrary({

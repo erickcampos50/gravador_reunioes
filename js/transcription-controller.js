@@ -512,19 +512,48 @@ export class TranscriptionController {
     return this.liveTranscript;
   }
 
-  async transcribeFileHandle(fileHandle, { prompt = '', alwaysVersion = false, onProgress, mode = TRANSCRIPTION_OUTPUT_MODES.plain, engine = '', speechModels = null } = {}) {
+  async transcribeFileHandle(fileHandle, { prompt = '', alwaysVersion = false, onProgress, onPartial, mode = TRANSCRIPTION_OUTPUT_MODES.plain, engine = '', speechModels = null } = {}) {
     const file = await fileHandle.getFile();
-    const result = await this.transcribeFile(file, { prompt, onProgress, mode, engine, speechModels });
+    const suffix = TRANSCRIPTION_OUTPUT_MODE_SUFFIXES[mode] || '';
+    const resolvedFileName = await this.#mediaLibrary.resolveTranscriptFileName(file.name, { alwaysVersion, suffix });
+
+    let latestText = '';
+    let latestResult = null;
+    let partialWrite = Promise.resolve();
+    const handlePartial = (payload) => {
+      if (typeof onPartial === 'function') onPartial(payload);
+      const text = payload?.text ?? '';
+      if (text && text !== latestText) {
+        latestResult = text;
+        latestText = text;
+        partialWrite = partialWrite
+          .then(() => {
+            const trimmed = String(text).trim();
+            if (!trimmed) return;
+            return this.#mediaLibrary.writeTranscriptToResolved(resolvedFileName, trimmed).catch(() => {});
+          });
+      }
+    };
+
+    const result = await this.transcribeFile(file, { prompt, onProgress, onPartial: handlePartial, mode, engine, speechModels });
+    await partialWrite;
+
     onProgress?.({ stage: 'saving', message: 'Transcrição concluída. Salvando o arquivo de texto na pasta selecionada…' });
-    const savedTranscript = await this.#mediaLibrary.writeTranscript(file.name, result.text, {
-      alwaysVersion,
-      suffix: TRANSCRIPTION_OUTPUT_MODE_SUFFIXES[mode] || '',
-    });
+    const finalText = result.text || latestResult || '';
+    let savedTranscript;
+    if (finalText.trim()) {
+      savedTranscript = await this.#mediaLibrary.writeTranscriptToResolved(resolvedFileName, finalText);
+    } else {
+      savedTranscript = await this.#mediaLibrary.writeTranscript(file.name, finalText, {
+        alwaysVersion,
+        suffix,
+      });
+    }
     onProgress?.({ stage: 'saved', message: `Transcrição salva como ${savedTranscript.fileName}.` });
     return { ...result, ...savedTranscript };
   }
 
-  async transcribeFile(file, { prompt = '', onProgress, mode = TRANSCRIPTION_OUTPUT_MODES.plain, engine = '', speechModels = null } = {}) {
+  async transcribeFile(file, { prompt = '', onProgress, onPartial, mode = TRANSCRIPTION_OUTPUT_MODES.plain, engine = '', speechModels = null } = {}) {
     if (!(file instanceof File)) throw new Error('Nenhum arquivo foi selecionado para transcrição.');
 
     const clientManager = this.#resolveClientManager(engine);
@@ -553,7 +582,7 @@ export class TranscriptionController {
         });
         const text = await clientManager.transcribeFile({ file, prompt, speechModels });
         onProgress?.({ stage: 'assembling', message: 'Resposta recebida. Preparando o texto final…' });
-        return { text: text.trim(), mode };
+        return { text: text.trim(), mode, partialFailures: [] };
       }
 
       onProgress?.({
@@ -563,6 +592,7 @@ export class TranscriptionController {
           : `Preparando ${file.name} para transcrição em partes…`,
       });
       let transcript = '';
+      const partialFailures = [];
 
       await this.#processUploadChunks(file, onProgress, {
         onChunk: async (chunk, index, total) => {
@@ -573,7 +603,18 @@ export class TranscriptionController {
             current: index + 1,
             total,
           });
-          const chunkText = await clientManager.transcribeFile({ file: chunk, prompt: chunkPrompt, speechModels });
+          let chunkText = '';
+          try {
+            chunkText = await clientManager.transcribeFile({ file: chunk, prompt: chunkPrompt, speechModels });
+          } catch (error) {
+            partialFailures.push({ index: index + 1, message: error?.message || String(error) });
+            onProgress?.({
+              stage: 'partial-failure',
+              message: `Parte ${index + 1} de ${total} falhou: ${error?.message || 'erro desconhecido.'} Continuando com as próximas partes…`,
+              current: index + 1,
+              total,
+            });
+          }
           onProgress?.({
             stage: 'assembling',
             message: `Parte ${index + 1} de ${total} recebida. Integrando ao texto acumulado…`,
@@ -581,11 +622,23 @@ export class TranscriptionController {
             total,
           });
           transcript = mergeTranscriptText(transcript, chunkText);
+          onPartial?.({ text: transcript.trim(), current: index + 1, total });
         },
       });
 
-      onProgress?.({ stage: 'assembling', message: 'Todas as partes foram recebidas. Montando a transcrição final…' });
-      return { text: transcript.trim(), mode };
+      onProgress?.({
+        stage: 'assembling',
+        message: partialFailures.length
+          ? `Todas as partes foram recebidas, mas ${partialFailures.length} falhou${partialFailures.length > 1 ? 'ram' : ''}. Montando a transcrição final com as partes disponíveis…`
+          : 'Todas as partes foram recebidas. Montando a transcrição final…',
+      });
+      if (!transcript.trim() && partialFailures.length) {
+        throw new Error(
+          `Nenhuma parte foi transcrita. ${partialFailures.length} parte${partialFailures.length > 1 ? 's' : ''} falharam: ` +
+          partialFailures.map(f => `parte ${f.index} (${f.message})`).join('; ')
+        );
+      }
+      return { text: transcript.trim(), mode, partialFailures };
     }
 
     if (!needsNormalization) {
@@ -604,6 +657,7 @@ export class TranscriptionController {
         rawText: (result.text || '').trim(),
         segments,
         mode,
+        partialFailures: [],
       };
     }
 
@@ -615,6 +669,7 @@ export class TranscriptionController {
     });
     let transcript = '';
     let structuredSegments = [];
+    const partialFailures = [];
 
     await this.#processUploadChunks(file, onProgress, {
       includeOffsets: true,
@@ -627,14 +682,25 @@ export class TranscriptionController {
           total,
         });
 
-        const chunkResult = await clientManager.transcribeFileDetailed({
-          file: chunk.file,
-          prompt: chunkPrompt,
-          mode,
-          speechModels,
-        });
+        let chunkResult = null;
+        try {
+          chunkResult = await clientManager.transcribeFileDetailed({
+            file: chunk.file,
+            prompt: chunkPrompt,
+            mode,
+            speechModels,
+          });
+        } catch (error) {
+          partialFailures.push({ index: index + 1, message: error?.message || String(error) });
+          onProgress?.({
+            stage: 'partial-failure',
+            message: `Parte ${index + 1} de ${total} falhou: ${error?.message || 'erro desconhecido.'} Continuando com as próximas partes…`,
+            current: index + 1,
+            total,
+          });
+        }
 
-        const chunkText = (chunkResult.text || '').trim();
+        const chunkText = (chunkResult?.text || '').trim();
         onProgress?.({
           stage: 'assembling',
           message: `Parte ${index + 1} de ${total} recebida. Ajustando segmentos e timestamps…`,
@@ -643,21 +709,39 @@ export class TranscriptionController {
         });
         transcript = mergeTranscriptText(transcript, chunkText);
 
-        const chunkSegments = normalizeStructuredSegments(chunkResult.segments, chunk.startSeconds);
+        const chunkSegments = chunkResult
+          ? normalizeStructuredSegments(chunkResult.segments, chunk.startSeconds)
+          : [];
         structuredSegments = mergeStructuredSegments(structuredSegments, chunkSegments);
+
+        const partialText = structuredSegments.length
+          ? formatStructuredTranscript(structuredSegments, { includeSpeaker: mode === TRANSCRIPTION_OUTPUT_MODES.diarized })
+          : transcript.trim();
+        onPartial?.({ text: partialText, current: index + 1, total });
       },
     });
 
-    onProgress?.({ stage: 'assembling', message: 'Todas as partes foram recebidas. Montando a transcrição estruturada final…' });
+    onProgress?.({
+      stage: 'assembling',
+      message: 'Todas as partes foram recebidas. Montando a transcrição estruturada final…',
+    });
     const text = structuredSegments.length
       ? formatStructuredTranscript(structuredSegments, { includeSpeaker: mode === TRANSCRIPTION_OUTPUT_MODES.diarized })
       : transcript.trim();
+
+    if (!text && partialFailures.length) {
+      throw new Error(
+        `Nenhuma parte foi transcrita. ${partialFailures.length} parte${partialFailures.length > 1 ? 's' : ''} falharam: ` +
+        partialFailures.map(f => `parte ${f.index} (${f.message})`).join('; ')
+      );
+    }
 
     return {
       text,
       rawText: transcript.trim(),
       segments: structuredSegments,
       mode,
+      partialFailures,
     };
   }
 

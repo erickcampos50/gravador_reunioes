@@ -391,16 +391,25 @@ export class MediaLibrary {
     const trimmed = transcriptText.trim();
     if (!trimmed) throw new Error('A transcrição está vazia.');
 
+    const fileName = await this.resolveTranscriptFileName(mediaFileName, { alwaysVersion, variant, suffix });
+    return this.writeTranscriptToResolved(fileName, trimmed);
+  }
+
+  async resolveTranscriptFileName(mediaFileName, { alwaysVersion = false, variant = 'final', suffix = '' } = {}) {
     const transcriptStem = getTranscriptStem(mediaFileName, { variant, suffix });
     const transcriptStems = getTranscriptStems(mediaFileName, { variant, suffix, includeLegacy: true });
     const entries = await this.#storage.listDirectoryFileHandles();
     const hasStem = entries.some(entry => transcriptStems.some(stem =>
       entry.name === `${stem}.txt` || ((/\.txt$/i).test(entry.name) && entry.name.startsWith(`${stem}-`))
     ));
-    const fileName = !alwaysVersion && !hasStem
+    return !alwaysVersion && !hasStem
       ? `${transcriptStem}.txt`
       : `${transcriptStem}-${dateStamp()}.txt`;
+  }
 
+  async writeTranscriptToResolved(fileName, transcriptText) {
+    const trimmed = String(transcriptText || '').trim();
+    if (!trimmed) throw new Error('A transcrição está vazia.');
     const handle = await this.#storage.writeTextFile(fileName, `${trimmed}\n`);
     return { fileName, handle };
   }
