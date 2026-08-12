@@ -8,6 +8,9 @@ export const ASSEMBLYAI_SPEECH_MODELS = {
   v3: ['universal-3-pro'],
 };
 
+const ASSEMBLYAI_FALLBACK_LANGUAGE_CODE = 'pt';
+const ASSEMBLYAI_NO_SPOKEN_AUDIO_ERROR_RE = /language_detection cannot be performed on files with no spoken audio/i;
+
 const OPENAI_TRANSCRIPTION_MODELS = [
   'gpt-4o-transcribe',
   'gpt-4o-mini-transcribe',
@@ -337,6 +340,10 @@ function getAssemblyAiSpeechModelUsed(data) {
   return typeof data?.speech_model_used === 'string' && data.speech_model_used.trim()
     ? data.speech_model_used.trim()
     : (typeof data?.speech_model === 'string' ? data.speech_model.trim() : '');
+}
+
+function isNoSpokenAudioLanguageDetectionError(error) {
+  return ASSEMBLYAI_NO_SPOKEN_AUDIO_ERROR_RE.test(error?.message || '');
 }
 
 function createAssemblyAiEmptyTranscriptError(data) {
@@ -812,10 +819,22 @@ export class AssemblyAIClientManager {
 
     try {
       const audioUrl = await this.#uploadFile(file, apiKey, requestSignal);
-      const result = await this.#createAndPollTranscript(audioUrl, apiKey, requestSignal, {
-        speakerLabels,
-        speechModels: models,
-      });
+      let result;
+      try {
+        result = await this.#createAndPollTranscript(audioUrl, apiKey, requestSignal, {
+          speakerLabels,
+          speechModels: models,
+        });
+      } catch (error) {
+        if (!isNoSpokenAudioLanguageDetectionError(error)) {
+          throw error;
+        }
+        result = await this.#createAndPollTranscript(audioUrl, apiKey, requestSignal, {
+          speakerLabels,
+          speechModels: models,
+          languageCode: ASSEMBLYAI_FALLBACK_LANGUAGE_CODE,
+        });
+      }
 
       if (hasAssemblyAiTranscriptContent(result)) {
         return result;
@@ -852,8 +871,8 @@ export class AssemblyAIClientManager {
     }
   }
 
-  async #createAndPollTranscript(audioUrl, apiKey, signal, { speakerLabels = false, speechModels = ASSEMBLYAI_SPEECH_MODELS } = {}) {
-    const transcriptId = await this.#createTranscript(audioUrl, apiKey, signal, { speakerLabels, speechModels });
+  async #createAndPollTranscript(audioUrl, apiKey, signal, { speakerLabels = false, speechModels = ASSEMBLYAI_SPEECH_MODELS, languageCode = '' } = {}) {
+    const transcriptId = await this.#createTranscript(audioUrl, apiKey, signal, { speakerLabels, speechModels, languageCode });
     if (!transcriptId) {
       throw new Error('A AssemblyAI não retornou um identificador de transcrição.');
     }
@@ -893,7 +912,7 @@ export class AssemblyAIClientManager {
     return audioUrl;
   }
 
-  async #createTranscript(audioUrl, apiKey, signal, { speakerLabels = false, speechModels = ASSEMBLYAI_SPEECH_MODELS } = {}) {
+  async #createTranscript(audioUrl, apiKey, signal, { speakerLabels = false, speechModels = ASSEMBLYAI_SPEECH_MODELS, languageCode = '' } = {}) {
     const transcriptResponse = await fetch(`${ASSEMBLYAI_BASE_URL}/v2/transcript`, {
       method: 'POST',
       headers: {
@@ -902,7 +921,9 @@ export class AssemblyAIClientManager {
       },
       body: JSON.stringify({
         audio_url: audioUrl,
-        language_detection: true,
+        ...(languageCode
+          ? { language_code: languageCode }
+          : { language_detection: true }),
         speech_models: [...speechModels],
         ...(speakerLabels ? { speaker_labels: true } : {}),
       }),
